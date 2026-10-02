@@ -73,7 +73,10 @@ const isBRMobile = n => n.startsWith("55") && n.length === 13 && n[4] === "9";
 const STAGES = [["novo","Novo"],["contactado","Contactado"],["respondeu","Respondeu"],["reuniao","Reunião"],["fechado","Fechado ✅"],["perdido","Perdido"]];
 const stageName = k => STAGES.find(s => s[0] === k)[1];
 let S = store.get("gc_state", {});           // id -> {stage, notes, manual, snap}
-let cfg = store.get("gc_cfg", {me:"", cc:"55", tpl:"Olá, tudo bem? Aqui é {eu}. Vi que a {nome} atua em {cidade} mas não encontrei um site/landing page de vocês. Faço páginas simples que ajudam {nicho} a receber mais clientes pelo WhatsApp. Posso te mostrar um exemplo rápido, sem compromisso?"});
+const DEFAULT_TPL = "Olá, tudo bem? Aqui é {eu}, desenvolvedor web aqui da região de {cidade}.\n\nPesquisei a {nome} no Google e no mapa e vi que vocês ainda não têm um site ou página própria. Hoje muita gente procura {nicho} pelo celular antes de ir ao local, e quem não aparece direito acaba perdendo cliente para o concorrente.\n\nEu crio páginas simples e profissionais (landing pages) para negócios locais, com:\n• fotos, serviços e preços;\n• horário e localização no mapa;\n• botão direto para o seu WhatsApp, para o cliente já chamar e agendar.\n\nA ideia é você receber mais contatos de clientes novos, sem depender só de indicação ou rede social.\n\nPosso te mandar um exemplo rápido, sem compromisso? Se não fizer sentido, sem problema nenhum 🙂";
+const OLD_TPL = "Olá, tudo bem? Meu nome é Pietro e eu trabalho com programação. Vi que a {nome} atua em {cidade} mas não encontrei um site de vocês. Faço páginas simples que ajudam {nicho} a receber mais clientes pelo WhatsApp. Posso te mostrar um exemplo rápido, sem compromisso?";
+let cfg = store.get("gc_cfg", {me:"", cc:"55", tpl:DEFAULT_TPL});
+if(cfg.tpl === OLD_TPL){ cfg.tpl = DEFAULT_TPL; store.set("gc_cfg", cfg); }
 let leads = [], ctx = null, selId = null, filt = {wa:false, ig:false, em:false, site:false}, view = "map";
 const stageOf = l => S[l.id]?.stage || "novo";
 const saveS = () => store.set("gc_state", S);
@@ -101,25 +104,38 @@ function toast(t, err){ const m = $("msgbar"); m.textContent = t; m.className = 
 
 /* ====== busca ====== */
 async function geocode(q){
-  const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=pt-BR&q=" + encodeURIComponent(q));
+  const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=pt-BR" + (cfg.cc === "55" ? "&countrycodes=br" : "") + "&q=" + encodeURIComponent(q));
   if(!r.ok) throw new Error("Falha ao localizar a cidade (Nominatim).");
   const j = await r.json(); if(!j.length) throw new Error("Cidade não encontrada. Tente 'Cidade, Estado'.");
-  return {lat:+j[0].lat, lon:+j[0].lon};
+  return {lat:+j[0].lat, lon:+j[0].lon, name:(j[0].display_name||"").split(",").slice(0,3).join(",").trim()};
 }
 function buildQuery(nq, lat, lon, rad){
   const around = `(around:${Math.round(rad*1000)},${lat},${lon})`;
   let parts;
   if(nq.f) parts = nq.f.map(f => { const [k,v] = f.split("="); const c = v.includes("|") ? `["${k}"~"^(${v})$"]` : `["${k}"="${v}"]`; return `nwr${c}["name"]${around};`; });
   else parts = [`nwr["name"~"${nq.name.replace(/[^a-z0-9 ]/g,"")}",i]${around};`];
-  return `[out:json][timeout:60];(${parts.join("")});out center tags;`;
+  return `[out:json][timeout:25][maxsize:67108864];(${parts.join("")});out center tags;`;
+}
+const OVERPASS_EPS = ["https://overpass.openstreetmap.fr/api/interpreter","https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter"];
+async function overpassOnce(q, ctl){
+  // dispara em todos os servidores ao mesmo tempo; vale o primeiro que responder bem
+  const tryEp = async ep => {
+    const r = await fetch(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}, signal:ctl.signal});
+    if(!r.ok) throw new Error("Overpass respondeu "+r.status);
+    const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do Overpass");
+    return j;
+  };
+  return Promise.any(OVERPASS_EPS.map(tryEp));
 }
 async function overpass(q){
   let last;
-  for(const ep of ["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"]){
-    try{ const r = await fetch(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}}); if(r.ok) return await r.json(); last = new Error("Overpass respondeu "+r.status); }
-    catch(e){ last = e; }
+  for(let i = 0; i < 2; i++){
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
+    try{ const j = await overpassOnce(q, ctl); ctl.abort(); return j; }
+    catch(e){ last = e.errors?.[0] || e; if(i === 0) toast("Servidor ocupado, tentando de novo…"); await new Promise(r => setTimeout(r, 1500)); }
+    finally{ clearTimeout(timer); }
   }
-  throw last || new Error("Overpass indisponível.");
+  throw new Error("Os servidores do OpenStreetMap estão sobrecarregados. Tente de novo em instantes ou diminua o raio. ("+(last?.message||"sem resposta")+")");
 }
 function build(el){
   const t = el.tags || {}, lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat == null) return null;
@@ -147,6 +163,15 @@ function build(el){
     osm:`https://www.openstreetmap.org/${el.type}/${el.id}`, google:"https://www.google.com/search?q="+encodeURIComponent(`"${t.name}" ${ctx.cityShort}`)};
   return applyManual(l);
 }
+// descarta WhatsApp com DDD diferente do predominante na região (evita número de outra cidade/homônimo)
+function checkDDD(arr){
+  const dd = l => l.phone && l.phone.startsWith("55") ? l.phone.slice(2,4) : null;
+  const cnt = {}; arr.forEach(l => { const d = dd(l); if(d) cnt[d] = (cnt[d]||0)+1; });
+  const top = Object.entries(cnt).sort((a,b) => b[1]-a[1])[0];
+  if(!top || top[1] < 3) return;
+  arr.forEach(l => { const d = dd(l);
+    if(d && d !== top[0] && l.waKind !== "informado por você"){ l.dddWarn = d; l.whatsapp = null; l.waKind = ""; } });
+}
 const hasContact = l => !!(l.phone || l.whatsapp || l.insta || l.face || l.email);
 
 async function search(niche, city, rad){
@@ -157,10 +182,11 @@ async function search(niche, city, rad){
     ctx = {lat:g.lat, lon:g.lon, rad, label:nq.label, cityShort:city.split(",")[0].trim()};
     map.setView([g.lat,g.lon], rad > 15 ? 10 : rad > 8 ? 11 : rad > 3 ? 12 : 13);
     if(circle) circle.remove(); circle = L.circle([g.lat,g.lon], {radius:rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
-    toast("Buscando no OpenStreetMap… pode levar alguns segundos");
+    toast("Buscando em "+(g.name||city)+"… pode levar alguns segundos");
     const data = await overpass(buildQuery(nq, g.lat, g.lon, rad));
     const seen = new Set();
-    leads = (data.elements||[]).map(build).filter(Boolean).filter(l => !seen.has(l.id) && seen.add(l.id));
+    leads = (data.elements||[]).map(build).filter(Boolean).filter(l => l.dist <= rad).filter(l => !seen.has(l.id) && seen.add(l.id));
+    checkDDD(leads);
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
     h.unshift({niche, city, rad}); store.set("gc_hist", h.slice(0,10));
@@ -193,7 +219,7 @@ function renderList(){
   $("list").innerHTML = vis.map(l => `<div class="card ${l.id===selId?"sel":""} ${stageOf(l)!=="novo"?"done":""}" data-id="${l.id}">
     <div class="row1"><b>${esc(l.name)}</b><span class="temp"><span class="tb ${l.temp}">${{hot:"Quente",warm:"Morno",cold:"Frio"}[l.temp]}</span>${l.score}</span></div>
     <div class="addr">${esc(l.addr || "Endereço não informado")} · ${l.dist.toFixed(1)} km</div>
-    ${l.phone ? `<div>📞 ${esc(fmtPhone(l.phone, cfg.cc))}</div>` : ""}
+    ${l.phone ? `<div>📞 ${esc(fmtPhone(l.phone, cfg.cc))}${l.dddWarn ? ` <span class="tag" title="O DDD deste número é diferente do predominante na região. Confira antes de ligar.">⚠ DDD ${esc(l.dddWarn)} diferente da região</span>` : ""}</div>` : ""}
     <div class="acts">
       ${l.whatsapp ? `<a class="btn wa" data-act="wa" href="${esc(waLink(l))}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ""}
       <button class="btn" data-act="det" type="button">📝 Detalhes</button>
