@@ -125,7 +125,16 @@ async function overpassOnce(q, ctl){
     const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do Overpass");
     return j;
   };
-  return Promise.any(OVERPASS_EPS.map(tryEp));
+  // no Vercel usa o proxy do próprio site (os espelhos bloqueiam requisições vindas de *.vercel.app)
+  const viaProxy = async () => {
+    const r = await fetch("/api/overpass", {method:"POST", body:q, headers:{"Content-Type":"text/plain"}, signal:ctl.signal});
+    if(!r.ok) throw new Error("Proxy respondeu "+r.status);
+    const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do proxy");
+    return j;
+  };
+  const web = location.protocol.startsWith("http") && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  if(!web) return Promise.any(OVERPASS_EPS.map(tryEp));
+  try{ return await viaProxy(); }catch(e){ if(ctl.signal.aborted) throw e; return Promise.any(OVERPASS_EPS.map(tryEp)); }
 }
 async function overpass(q){
   let last;
