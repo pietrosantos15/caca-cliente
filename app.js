@@ -17,7 +17,7 @@ const NICHES = [
  {l:"Clínicas / médicos",k:["clinica","medico","consultorio","fisioterapia"],f:["amenity=clinic|doctors"]},
  {l:"Dentista",k:["dentista","odontologia","dentist"],f:["amenity=dentist"]},
  {l:"Veterinária",k:["veterinaria","veterinario","vet"],f:["amenity=veterinary"]},
- {l:"Pet shop",k:["pet shop","petshop","pet"],f:["shop=pet"]},
+ {l:"Pet shops",k:["pet shop","petshop","pet"],f:["shop=pet"]},
  {l:"Oficina mecânica",k:["oficina","mecanica","mecanico","auto center"],f:["shop=car_repair"]},
  {l:"Autopeças",k:["autopecas","auto pecas","pecas"],f:["shop=car_parts"]},
  {l:"Imobiliária",k:["imobiliaria","corretor","imoveis"],f:["office=estate_agent"]},
@@ -75,13 +75,14 @@ const stageName = k => STAGES.find(s => s[0] === k)[1];
 let S = store.get("gc_state", {});           // id -> {stage, notes, manual, snap}
 const DEFAULT_TPL = "Olá, tudo bem? Aqui é {eu}, desenvolvedor web aqui da região de {cidade}.\n\nPesquisei a {nome} no Google e no mapa e vi que vocês ainda não têm um site ou página própria. Hoje muita gente procura {nicho} pelo celular antes de ir ao local, e quem não aparece direito acaba perdendo cliente para o concorrente.\n\nEu crio páginas simples e profissionais (landing pages) para negócios locais, com:\n• fotos, serviços e preços;\n• horário e localização no mapa;\n• botão direto para o seu WhatsApp, para o cliente já chamar e agendar.\n\nA ideia é você receber mais contatos de clientes novos, sem depender só de indicação ou rede social.\n\nPosso te mandar um exemplo rápido, sem compromisso? Se não fizer sentido, sem problema nenhum 🙂";
 const OLD_TPL = "Olá, tudo bem? Meu nome é Pietro e eu trabalho com programação. Vi que a {nome} atua em {cidade} mas não encontrei um site de vocês. Faço páginas simples que ajudam {nicho} a receber mais clientes pelo WhatsApp. Posso te mostrar um exemplo rápido, sem compromisso?";
-let cfg = store.get("gc_cfg", {me:"", cc:"55", tpl:DEFAULT_TPL});
+let cfg = store.get("gc_cfg", {me:"Pietro", cc:"55", tpl:DEFAULT_TPL});
+if(!cfg.me) cfg.me = "Pietro";
 if(cfg.tpl === OLD_TPL){ cfg.tpl = DEFAULT_TPL; store.set("gc_cfg", cfg); }
 let leads = [], ctx = null, selId = null, filt = {wa:false, ig:false, em:false, site:false}, view = "map";
 const stageOf = l => S[l.id]?.stage || "novo";
 const saveS = () => store.set("gc_state", S);
 const saveCfg = () => store.set("gc_cfg", cfg);
-const msgFor = l => cfg.tpl.replaceAll("{nome}", l.name).replaceAll("{nicho}", l.nicho || "comércios").replaceAll("{cidade}", l.city || "sua cidade").replaceAll("{eu}", cfg.me || "um desenvolvedor web");
+const msgFor = l => cfg.tpl.replaceAll("{nome}", l.name).replaceAll("{nicho}", l.nicho || "comércios").replaceAll("{cidade}", l.city || "sua cidade").replaceAll("{eu}", cfg.me || "Pietro");
 const waLink = l => l.whatsapp ? `https://wa.me/${l.whatsapp}?text=${encodeURIComponent(msgFor(l))}` : "";
 function setStage(l, stage){
   S[l.id] = Object.assign(S[l.id] || {}, {stage, snap:l});
