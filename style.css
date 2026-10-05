@@ -25,6 +25,8 @@ aside>*{flex-shrink:0}
 .chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 8px}
 .chip{border-radius:99px;padding:4px 10px;font-size:12px;color:var(--mut)}
 .chip.on{background:var(--acd);border-color:var(--acd);color:#fff}
+.chip.t-hot.on{background:var(--hot);border-color:var(--hot)}.chip.t-warm.on{background:var(--warm);border-color:var(--warm)}.chip.t-cold.on{background:var(--cold);border-color:var(--cold)}
+.chip span{opacity:.75;font-size:11px}
 .fire{background:#1fbf5b;border-color:#1fbf5b;color:#fff;font-weight:700}
 #list{padding:10px 12px;display:grid;gap:8px;align-content:start;border-top:1px solid var(--line)}
 .card{border:1px solid var(--line);border-radius:10px;padding:10px;display:grid;gap:6px;background:var(--panel);cursor:pointer}

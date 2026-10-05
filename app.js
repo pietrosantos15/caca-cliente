@@ -91,7 +91,7 @@ const OLD_TPL = "Olá, tudo bem? Meu nome é {eu}, sou estudante de Análise e D
 let cfg = store.get("gc_cfg", {me:"Pietro", cc:"55", tpl:DEFAULT_TPL});
 if(!cfg.me) cfg.me = "Pietro";
 if(cfg.tpl === OLD_TPL || cfg.tpl === PREV_TPL){ cfg.tpl = DEFAULT_TPL; store.set("gc_cfg", cfg); }
-let leads = [], ctx = null, selId = null, filt = {wa:false, ig:false, em:false, site:false}, view = "map";
+let leads = [], ctx = null, selId = null, filt = {wa:false, ig:false, em:false, site:false}, tempSel = {hot:false, warm:false, cold:false}, view = "map";
 const stageOf = l => S[l.id]?.stage || "novo";
 const saveS = () => store.set("gc_state", S);
 const saveCfg = () => store.set("gc_cfg", cfg);
@@ -251,6 +251,8 @@ function visible(){
   if(filt.wa) a = a.filter(l => l.whatsapp);
   if(filt.ig) a = a.filter(l => l.insta || l.face);
   if(filt.em) a = a.filter(l => l.email);
+  // temperatura: sem nenhuma marcada mostra todas; marcando, mostra só as escolhidas
+  if(tempSel.hot || tempSel.warm || tempSel.cold) a = a.filter(l => tempSel[l.temp]);
   const by = $("sort").value;
   return a.sort((x,y) => by==="dist" ? x.dist-y.dist : by==="name" ? x.name.localeCompare(y.name) : y.score-x.score);
 }
@@ -258,8 +260,10 @@ function renderAll(){ renderList(); renderMap(); renderKanban(); renderDash(); }
 
 function renderList(){
   const has = leads.length > 0;
-  ["exp","filters","chips","fireWrap"].forEach(i => $(i).hidden = !has);
+  ["exp","filters","chips","tempChips","fireWrap"].forEach(i => $(i).hidden = !has);
   if(!has){ $("list").innerHTML = ""; return; }
+  const base = leads.filter(l => filt.site || !l.hasSite);
+  document.querySelectorAll("#tempChips .chip").forEach(c => c.querySelector("span").textContent = base.filter(l => l.temp === c.dataset.t).length);
   const vis = visible(), noSite = leads.filter(l => !l.hasSite);
   const rich = noSite.filter(hasContact).length;
   $("stats").innerHTML = `<b>${noSite.length}</b> sem site (de ${leads.length} no raio) · <b>${rich}/${noSite.length}</b> com contato`;
@@ -421,7 +425,8 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
   document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
   if(view === "map") setTimeout(() => map.invalidateSize(), 50); else { renderKanban(); renderDash(); }
 });
-document.querySelectorAll(".chip").forEach(c => c.onclick = () => { filt[c.dataset.f] = !filt[c.dataset.f]; c.classList.toggle("on", filt[c.dataset.f]); renderAll(); });
+document.querySelectorAll("#tempChips .chip").forEach(c => c.onclick = () => { tempSel[c.dataset.t] = !tempSel[c.dataset.t]; c.classList.toggle("on", tempSel[c.dataset.t]); renderAll(); });
+document.querySelectorAll(".chip[data-f]").forEach(c => c.onclick = () => { filt[c.dataset.f] = !filt[c.dataset.f]; c.classList.toggle("on", filt[c.dataset.f]); renderAll(); });
 $("list").addEventListener("click", e => {
   const card = e.target.closest(".card"); if(!card) return;
   const id = card.dataset.id, act = e.target.closest("[data-act]")?.dataset.act;
