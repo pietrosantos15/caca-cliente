@@ -131,12 +131,35 @@ function buildQuery(nq, lat, lon, rad, byName){
   if(byName) parts = [`nwr["name"~"${nq.r}",i]["amenity"!="veterinary"]["shop"!="pet"]${around};`];
   else if(nq.f) parts = nq.f.map(f => { const [k,v] = f.split("="); const c = v.includes("|") ? `["${k}"~"^(${v})$"]` : `["${k}"="${v}"]`; return `nwr${c}["name"]${around};`; });
   else parts = [`nwr["name"~"${nq.name.replace(/[^a-z0-9 ]/g,"")}",i]${around};`];
-  return `[out:json][timeout:25][maxsize:67108864];(${parts.join("")});out center tags;`;
+  return `[out:json][timeout:25][maxsize:67108864];(${parts.join("")});out center tags qt;`;
 }
-const OVERPASS_EPS = ["https://overpass.openstreetmap.fr/api/interpreter","https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter"];
+const OVERPASS_EPS = ["https://overpass-api.de/api/interpreter","https://lz4.overpass-api.de/api/interpreter","https://overpass.openstreetmap.fr/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter"];
+const qCache = new Map();   // consulta -> {t, j}: repetir a mesma busca não consulta os servidores de novo
+// Pede a UM servidor por vez: o próximo só é acionado se o atual falhar ou demorar mais que `stagger`.
+// Evita estourar o limite por IP dos servidores públicos (429/504). Resultado vazio só vale se 2 servidores concordarem.
+function hedged(fns, stagger){
+  return new Promise((resolve, reject) => {
+    let started = 0, pending = fns.length, empties = 0, empty = null, lastErr, done = false, timer;
+    const finish = (fn, v) => { if(done) return; done = true; clearTimeout(timer); fn(v); };
+    const next = () => {
+      if(done || started >= fns.length) return;
+      const run = fns[started++];
+      clearTimeout(timer);
+      if(started < fns.length) timer = setTimeout(next, stagger);
+      run().then(j => {
+        if(j.elements.length) return finish(resolve, j);
+        empty = empty || j; empties++;
+        if(empties >= 2 || --pending === 0) finish(resolve, empty); else next();
+      }, e => {
+        lastErr = e;
+        if(--pending === 0) empty ? finish(resolve, empty) : finish(reject, lastErr); else next();
+      });
+    };
+    next();
+  });
+}
 async function overpassOnce(q, ctl){
-  // dispara em todos os servidores ao mesmo tempo; vale o primeiro que responder bem
-  const tryEp = async ep => {
+  const tryEp = ep => async () => {
     const r = await fetch(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}, signal:ctl.signal});
     if(!r.ok) throw new Error("Overpass respondeu "+r.status);
     const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do Overpass");
@@ -147,34 +170,33 @@ async function overpassOnce(q, ctl){
   // no Vercel usa o proxy do próprio site (os espelhos bloqueiam requisições vindas de *.vercel.app)
   const viaProxy = async () => {
     const r = await fetch("/api/overpass", {method:"POST", body:q, headers:{"Content-Type":"text/plain"}, signal:ctl.signal});
-    if(!r.ok) throw new Error("Proxy respondeu "+r.status);
+    if(!r.ok){ const e = await r.json().catch(() => ({})); throw new Error(e.error || "Proxy respondeu "+r.status); }
     const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do proxy");
     return j;
   };
+  const direct = () => hedged(OVERPASS_EPS.map(tryEp), 3000);
   const web = location.protocol.startsWith("http") && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
-  if(!web) return firstGood(OVERPASS_EPS.map(tryEp));
-  try{ return await viaProxy(); }catch(e){ if(ctl.signal.aborted) throw e; return firstGood(OVERPASS_EPS.map(tryEp)); }
-}
-// aceita o 1º resultado com dados; "vazio" só vale se 2 servidores concordarem (ou for o último a responder)
-function firstGood(tasks){
-  return new Promise((resolve, reject) => {
-    let pending = tasks.length, empties = 0, empty = null, lastErr;
-    tasks.forEach(p => p.then(j => {
-      if(j.elements.length){ resolve(j); return; }
-      empty = empty || j; empties++;
-      if(empties >= 2 || --pending === 0) resolve(empty);
-    }, e => { lastErr = e; if(--pending === 0) empty ? resolve(empty) : reject(lastErr); }));
-  });
+  if(!web) return direct();
+  try{ return await viaProxy(); }catch(e){ if(ctl.signal.aborted) throw e; return direct(); }
 }
 async function overpass(q){
+  const hit = qCache.get(q);
+  if(hit && Date.now() - hit.t < 15*60*1000) return hit.j;
   let last;
   for(let i = 0; i < 2; i++){
-    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
-    try{ const j = await overpassOnce(q, ctl); ctl.abort(); return j; }
-    catch(e){ last = e.errors?.[0] || e; if(i === 0) toast("Servidor ocupado, tentando de novo…"); await new Promise(r => setTimeout(r, 1500)); }
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 34000);
+    try{
+      const j = await overpassOnce(q, ctl); ctl.abort();
+      if(j.elements.length){ if(qCache.size >= 20) qCache.delete(qCache.keys().next().value); qCache.set(q, {t:Date.now(), j}); }
+      return j;
+    }
+    catch(e){
+      last = e.errors?.[0] || e;
+      if(i === 0){ toast("Servidor ocupado, tentando de novo em alguns segundos…"); await new Promise(r => setTimeout(r, 5000)); }   // dá tempo dos servidores liberarem a vaga
+    }
     finally{ clearTimeout(timer); }
   }
-  throw new Error("Os servidores do OpenStreetMap estão sobrecarregados. Tente de novo em instantes ou diminua o raio. ("+(last?.message||"sem resposta")+")");
+  throw new Error("Os servidores do OpenStreetMap estão sobrecarregados. Tente de novo em 1 minuto ou diminua o raio. ("+(last?.message||"sem resposta")+")");
 }
 function build(el){
   const t = el.tags || {}, lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat == null) return null;
@@ -225,7 +247,7 @@ async function search(niche, city, rad){
     const data = await overpass(buildQuery(nq, g.lat, g.lon, rad));
     let elements = data.elements || [];
     // poucos resultados pelas tags? completa buscando pelo nome (ex.: "Clínica ...")
-    if(nq.r && elements.length < 10){
+    if(nq.r && elements.length < 10 && rad <= 15){
       toast("Poucos resultados pelas tags, buscando também pelo nome…");
       try{
         const extra = await overpass(buildQuery(nq, g.lat, g.lon, rad, true));
