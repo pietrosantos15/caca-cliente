@@ -7,11 +7,19 @@ const EPS = [
   "https://overpass.private.coffee/api/interpreter",
 ];
 const UA = "garimpo-local/1.0 (+https://github.com/pietrosantos15)";
-const STAGGER_MS = 3000;     // espera antes de acionar o próximo servidor (se o anterior ainda não respondeu)
+const EP_TIMEOUT_MS = 15000;  // tempo máximo por servidor
+const STAGGER_MS = 2500;     // espera antes de acionar o próximo servidor (se o anterior ainda não respondeu)
 const CACHE_TTL = 10 * 60 * 1000, CACHE_MAX = 30;
 const cache = new Map();     // consulta -> {t, j}; vale enquanto a instância serverless estiver "quente"
 
-async function tryEp(ep, q, signal){
+async function tryEp(ep, q, outer){
+  // limite de tempo por servidor: um espelho travado não segura os demais
+  const c = new AbortController(), t = setTimeout(() => c.abort(), EP_TIMEOUT_MS), on = () => c.abort();
+  outer.addEventListener("abort", on);
+  try{ return await tryEpInner(ep, q, c.signal); }
+  finally{ clearTimeout(t); outer.removeEventListener("abort", on); }
+}
+async function tryEpInner(ep, q, signal){
   const r = await fetch(ep, {
     method: "POST", signal,
     headers: {"Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA, "Accept": "application/json"},

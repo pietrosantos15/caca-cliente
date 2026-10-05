@@ -14,8 +14,8 @@ const NICHES = [
  {l:"Padarias",k:["padaria","confeitaria"],f:["shop=bakery"],m:"comida"},
  {l:"Salão de beleza",k:["salao","beleza","cabeleireiro","cabeleireira","barbearia","barbeiro","manicure","estetica"],f:["shop=hairdresser|beauty"],m:"beleza"},
  {l:"Academias",k:["academia","fitness","crossfit"],f:["leisure=fitness_centre"],m:"academia"},
- {l:"Clínicas / médicos",k:["clinica","medico","consultorio","fisioterapia","psicologo","psicologia","nutricionista","saude"],f:["amenity=clinic|doctors","healthcare=clinic|doctor|centre|physiotherapist|psychotherapist|alternative|audiologist|podiatrist|speech_therapist|occupational_therapist|nutrition_counselling"],r:"cl[ií]nica|policl[ií]nica|consult[óo]rio|fisioterapia|psic[óo]log|nutri[cç]|ortop|dermato|oftalmo|cardio|pediatr|ginecolog",m:"clinica"},
- {l:"Dentista",k:["dentista","odontologia","dentist"],f:["amenity=dentist","healthcare=dentist"],r:"dentist|odonto|ortodont",m:"clinica"},
+ {l:"Clínicas / médicos",k:["clinica","medico","consultorio","fisioterapia","psicologo","psicologia","nutricionista","saude"],f:["amenity=clinic|doctors","healthcare=clinic|doctor|centre|physiotherapist|psychotherapist|alternative|audiologist|podiatrist|speech_therapist|occupational_therapist|nutrition_counselling"],z:["clínica","consultório","médico"],m:"clinica"},
+ {l:"Dentista",k:["dentista","odontologia","dentist"],f:["amenity=dentist","healthcare=dentist"],z:["dentista","odontologia"],m:"clinica"},
  {l:"Veterinária",k:["veterinaria","veterinario","vet"],f:["amenity=veterinary"],m:"pet"},
  {l:"Pet shops",k:["pet shop","petshop","pet"],f:["shop=pet"],m:"pet"},
  {l:"Oficina mecânica",k:["oficina","mecanica","mecanico","auto center"],f:["shop=car_repair"],m:"auto"},
@@ -42,7 +42,7 @@ function resolveNiche(q){
   const direct = q.trim().match(/^([\w:]+)=([\w|:-]+)$/);
   if(direct) return {f:[q.trim()], label:q.trim()};
   const hit = NICHES.find(n => norm(n.l) === t) || NICHES.find(n => n.k.some(k => k === t)) || NICHES.find(n => n.k.some(k => t.includes(k) && k.length > 3));
-  if(hit) return {f:hit.f, r:hit.r, label:hit.l.toLowerCase(), m:hit.m};
+  if(hit) return {f:hit.f, z:hit.z || [hit.k[0]], label:hit.l.toLowerCase(), m:hit.m};
   return {name:t, label:q.trim().toLowerCase()};
 }
 
@@ -124,19 +124,24 @@ async function geocode(q){
   const j = await r.json(); if(!j.length) throw new Error("Cidade não encontrada. Tente 'Cidade, Estado'.");
   return {lat:+j[0].lat, lon:+j[0].lon, name:(j[0].display_name||"").split(",").slice(0,3).join(",").trim()};
 }
-function buildQuery(nq, lat, lon, rad, byName){
+function buildQuery(nq, lat, lon, rad){
   const around = `(around:${Math.round(rad*1000)},${lat},${lon})`;
   let parts;
-  // 2ª etapa: negócios que não têm a tag certa no OSM, mas têm o nome do nicho (ex.: "Clínica Vida")
-  if(byName) parts = [`nwr["name"~"${nq.r}",i]["amenity"!="veterinary"]["shop"!="pet"]${around};`];
-  else if(nq.f) parts = nq.f.map(f => { const [k,v] = f.split("="); const c = v.includes("|") ? `["${k}"~"^(${v})$"]` : `["${k}"="${v}"]`; return `nwr${c}["name"]${around};`; });
+  if(nq.f) parts = nq.f.map(f => { const [k,v] = f.split("="); const c = v.includes("|") ? `["${k}"~"^(${v})$"]` : `["${k}"="${v}"]`; return `nwr${c}["name"]${around};`; });
   else parts = [`nwr["name"~"${nq.name.replace(/[^a-z0-9 ]/g,"")}",i]${around};`];
   return `[out:json][timeout:25][maxsize:67108864];(${parts.join("")});out center tags qt;`;
 }
 const OVERPASS_EPS = ["https://overpass-api.de/api/interpreter","https://lz4.overpass-api.de/api/interpreter","https://overpass.openstreetmap.fr/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter"];
+const BROWSER_EPS = OVERPASS_EPS.slice(0, 2);   // os que aceitam chamada direta do navegador (CORS) mesmo em *.vercel.app
 const qCache = new Map();   // consulta -> {t, j}: repetir a mesma busca não consulta os servidores de novo
-// Pede a UM servidor por vez: o próximo só é acionado se o atual falhar ou demorar mais que `stagger`.
-// Evita estourar o limite por IP dos servidores públicos (429/504). Resultado vazio só vale se 2 servidores concordarem.
+// fetch com limite de tempo próprio: servidor travado não segura a busca inteira
+function fetchT(url, o, ms, outer){
+  const c = new AbortController(), t = setTimeout(() => c.abort(), ms), on = () => c.abort();
+  outer?.addEventListener("abort", on);
+  return fetch(url, {...o, signal:c.signal}).finally(() => { clearTimeout(t); outer?.removeEventListener("abort", on); });
+}
+// Tenta os caminhos em sequência: o próximo só entra se o atual falhar ou demorar mais que `stagger`.
+// Evita estourar o limite por IP dos servidores públicos (429/504). Resultado vazio só vale se 2 caminhos concordarem.
 function hedged(fns, stagger){
   return new Promise((resolve, reject) => {
     let started = 0, pending = fns.length, empties = 0, empty = null, lastErr, done = false, timer;
@@ -160,43 +165,56 @@ function hedged(fns, stagger){
 }
 async function overpassOnce(q, ctl){
   const tryEp = ep => async () => {
-    const r = await fetch(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}, signal:ctl.signal});
-    if(!r.ok) throw new Error("Overpass respondeu "+r.status);
+    const r = await fetchT(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}}, 15000, ctl.signal);
+    if(!r.ok) throw new Error(new URL(ep).host+" respondeu "+r.status);
     const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do Overpass");
     // 200 + lista vazia + "remark" = servidor estourou tempo/memória (falha, não "sem resultados")
-    if(j.remark && /runtime error|timed out|out of memory/i.test(j.remark)) throw new Error("Overpass sobrecarregado: "+j.remark);
+    if(j.remark && /runtime error|timed out|out of memory/i.test(j.remark)) throw new Error(new URL(ep).host+" sobrecarregado: "+j.remark);
     return j;
   };
-  // no Vercel usa o proxy do próprio site (os espelhos bloqueiam requisições vindas de *.vercel.app)
+  // proxy do próprio site (IP da Vercel) e navegador do usuário (IP dele) são "filas" diferentes nos servidores públicos
   const viaProxy = async () => {
-    const r = await fetch("/api/overpass", {method:"POST", body:q, headers:{"Content-Type":"text/plain"}, signal:ctl.signal});
+    const r = await fetchT("/api/overpass", {method:"POST", body:q, headers:{"Content-Type":"text/plain"}}, 30000, ctl.signal);
     if(!r.ok){ const e = await r.json().catch(() => ({})); throw new Error(e.error || "Proxy respondeu "+r.status); }
     const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do proxy");
     return j;
   };
-  const direct = () => hedged(OVERPASS_EPS.map(tryEp), 3000);
   const web = location.protocol.startsWith("http") && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
-  if(!web) return direct();
-  try{ return await viaProxy(); }catch(e){ if(ctl.signal.aborted) throw e; return direct(); }
+  return hedged(web ? [viaProxy, ...BROWSER_EPS.map(tryEp)] : OVERPASS_EPS.map(tryEp), 2500);
 }
 async function overpass(q){
   const hit = qCache.get(q);
   if(hit && Date.now() - hit.t < 15*60*1000) return hit.j;
-  let last;
-  for(let i = 0; i < 2; i++){
-    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 34000);
-    try{
-      const j = await overpassOnce(q, ctl); ctl.abort();
-      if(j.elements.length){ if(qCache.size >= 20) qCache.delete(qCache.keys().next().value); qCache.set(q, {t:Date.now(), j}); }
-      return j;
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 32000);
+  try{
+    const j = await overpassOnce(q, ctl);
+    if(j.elements.length){ if(qCache.size >= 20) qCache.delete(qCache.keys().next().value); qCache.set(q, {t:Date.now(), j}); }
+    return j;
+  }finally{ clearTimeout(timer); ctl.abort(); }   // cancela os caminhos que sobraram
+}
+// Fonte reserva/complementar: busca por nome no Nominatim (outro serviço do OSM, não depende do Overpass).
+// Devolve no mesmo formato dos elementos do Overpass para reaproveitar o build().
+async function nominatimPlaces(nq, lat, lon, rad){
+  const terms = nq.z || (nq.f ? null : [nq.label]);
+  if(!terms) return [];
+  const dLat = rad/111.32, dLon = rad/(111.32*Math.cos(lat*Math.PI/180));
+  const vb = [lon-dLon, lat+dLat, lon+dLon, lat-dLat].map(x => x.toFixed(5)).join(",");
+  const OK = ["amenity","healthcare","shop","office","tourism","leisure","craft"], out = [], seen = new Set();
+  for(let i = 0; i < terms.length; i++){
+    if(i) await new Promise(r => setTimeout(r, 1100));   // política do Nominatim: no máximo 1 requisição por segundo
+    const r = await fetchT("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=40&bounded=1&extratags=1&addressdetails=1&accept-language=pt-BR&viewbox="+vb+"&q="+encodeURIComponent(terms[i]), {}, 12000);
+    if(!r.ok) throw new Error("Nominatim respondeu "+r.status);
+    for(const p of await r.json()){
+      const name = p.name || p.namedetails?.name, key = p.osm_type+p.osm_id;
+      if(!name || seen.has(key) || !OK.includes(p.category)) continue;
+      if(nq.m === "clinica" && (p.type === "veterinary" || p.type === "pet")) continue;
+      seen.add(key);
+      const a = p.address || {};
+      out.push({type:p.osm_type, id:p.osm_id, lat:+p.lat, lon:+p.lon, tags:Object.assign({}, p.extratags, {name,
+        "addr:street":a.road, "addr:housenumber":a.house_number, "addr:suburb":a.suburb || a.neighbourhood, "addr:city":a.city || a.town || a.village})});
     }
-    catch(e){
-      last = e.errors?.[0] || e;
-      if(i === 0){ toast("Servidor ocupado, tentando de novo em alguns segundos…"); await new Promise(r => setTimeout(r, 5000)); }   // dá tempo dos servidores liberarem a vaga
-    }
-    finally{ clearTimeout(timer); }
   }
-  throw new Error("Os servidores do OpenStreetMap estão sobrecarregados. Tente de novo em 1 minuto ou diminua o raio. ("+(last?.message||"sem resposta")+")");
+  return out;
 }
 function build(el){
   const t = el.tags || {}, lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat == null) return null;
@@ -244,24 +262,25 @@ async function search(niche, city, rad){
     map.setView([g.lat,g.lon], rad > 15 ? 10 : rad > 8 ? 11 : rad > 3 ? 12 : 13);
     if(circle) circle.remove(); circle = L.circle([g.lat,g.lon], {radius:rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
     toast("Buscando em "+(g.name||city)+"… pode levar alguns segundos");
-    const data = await overpass(buildQuery(nq, g.lat, g.lon, rad));
-    let elements = data.elements || [];
-    // poucos resultados pelas tags? completa buscando pelo nome (ex.: "Clínica ...")
-    if(nq.r && elements.length < 10 && rad <= 15){
-      toast("Poucos resultados pelas tags, buscando também pelo nome…");
+    let elements = [], ovErr = null;
+    try{ elements = (await overpass(buildQuery(nq, g.lat, g.lon, rad))).elements || []; }
+    catch(e){ ovErr = e; }
+    // Overpass falhou ou trouxe poucos resultados? usa/complementa com o Nominatim
+    if(ovErr || elements.length < 10){
+      toast(ovErr ? "Servidor principal ocupado, usando a fonte reserva…" : "Poucos resultados, buscando também pelo nome…");
       try{
-        const extra = await overpass(buildQuery(nq, g.lat, g.lon, rad, true));
-        const ids = new Set(elements.map(e => e.type+e.id));
-        elements = elements.concat((extra.elements||[]).filter(e => !ids.has(e.type+e.id)));
-      }catch(e){ /* a busca por tags já funcionou; segue só com ela */ }
+        const extra = await nominatimPlaces(nq, g.lat, g.lon, rad), ids = new Set(elements.map(e => e.type+e.id));
+        elements = elements.concat(extra.filter(e => !ids.has(e.type+e.id)));
+      }catch(e){ /* sem a fonte reserva, segue só com o que o Overpass trouxe */ }
     }
+    if(ovErr && !elements.length) throw new Error("Os servidores do OpenStreetMap estão sobrecarregados. Tente de novo em 1 minuto ou diminua o raio. ("+(ovErr.message||"sem resposta")+")");
     const seen = new Set();
     leads = elements.map(build).filter(Boolean).filter(l => l.dist <= rad).filter(l => !seen.has(l.id) && seen.add(l.id));
     checkDDD(leads);
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
     h.unshift({niche, city, rad}); store.set("gc_hist", h.slice(0,10));
-    toast(leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
+    toast(ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
     renderAll();
   }catch(e){ toast(e.message || String(e), true); }
   finally{ btn.disabled = false; }
