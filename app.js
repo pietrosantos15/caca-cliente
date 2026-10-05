@@ -14,8 +14,8 @@ const NICHES = [
  {l:"Padarias",k:["padaria","confeitaria"],f:["shop=bakery"],m:"comida"},
  {l:"Salão de beleza",k:["salao","beleza","cabeleireiro","cabeleireira","barbearia","barbeiro","manicure","estetica"],f:["shop=hairdresser|beauty"],m:"beleza"},
  {l:"Academias",k:["academia","fitness","crossfit"],f:["leisure=fitness_centre"],m:"academia"},
- {l:"Clínicas / médicos",k:["clinica","medico","consultorio","fisioterapia"],f:["amenity=clinic|doctors"],m:"clinica"},
- {l:"Dentista",k:["dentista","odontologia","dentist"],f:["amenity=dentist"],m:"clinica"},
+ {l:"Clínicas / médicos",k:["clinica","medico","consultorio","fisioterapia","psicologo","psicologia","nutricionista","saude"],f:["amenity=clinic|doctors","healthcare=clinic|doctor|centre|physiotherapist|psychotherapist|alternative|audiologist|podiatrist|speech_therapist|occupational_therapist|nutrition_counselling"],r:"cl[ií]nica|policl[ií]nica|consult[óo]rio|fisioterapia|psic[óo]log|nutri[cç]|ortop|dermato|oftalmo|cardio|pediatr|ginecolog",m:"clinica"},
+ {l:"Dentista",k:["dentista","odontologia","dentist"],f:["amenity=dentist","healthcare=dentist"],r:"dentist|odonto|ortodont",m:"clinica"},
  {l:"Veterinária",k:["veterinaria","veterinario","vet"],f:["amenity=veterinary"],m:"pet"},
  {l:"Pet shops",k:["pet shop","petshop","pet"],f:["shop=pet"],m:"pet"},
  {l:"Oficina mecânica",k:["oficina","mecanica","mecanico","auto center"],f:["shop=car_repair"],m:"auto"},
@@ -42,7 +42,7 @@ function resolveNiche(q){
   const direct = q.trim().match(/^([\w:]+)=([\w|:-]+)$/);
   if(direct) return {f:[q.trim()], label:q.trim()};
   const hit = NICHES.find(n => norm(n.l) === t) || NICHES.find(n => n.k.some(k => k === t)) || NICHES.find(n => n.k.some(k => t.includes(k) && k.length > 3));
-  if(hit) return {f:hit.f, label:hit.l.toLowerCase(), m:hit.m};
+  if(hit) return {f:hit.f, r:hit.r, label:hit.l.toLowerCase(), m:hit.m};
   return {name:t, label:q.trim().toLowerCase()};
 }
 
@@ -124,10 +124,12 @@ async function geocode(q){
   const j = await r.json(); if(!j.length) throw new Error("Cidade não encontrada. Tente 'Cidade, Estado'.");
   return {lat:+j[0].lat, lon:+j[0].lon, name:(j[0].display_name||"").split(",").slice(0,3).join(",").trim()};
 }
-function buildQuery(nq, lat, lon, rad){
+function buildQuery(nq, lat, lon, rad, byName){
   const around = `(around:${Math.round(rad*1000)},${lat},${lon})`;
   let parts;
-  if(nq.f) parts = nq.f.map(f => { const [k,v] = f.split("="); const c = v.includes("|") ? `["${k}"~"^(${v})$"]` : `["${k}"="${v}"]`; return `nwr${c}["name"]${around};`; });
+  // 2ª etapa: negócios que não têm a tag certa no OSM, mas têm o nome do nicho (ex.: "Clínica Vida")
+  if(byName) parts = [`nwr["name"~"${nq.r}",i]["amenity"!="veterinary"]["shop"!="pet"]${around};`];
+  else if(nq.f) parts = nq.f.map(f => { const [k,v] = f.split("="); const c = v.includes("|") ? `["${k}"~"^(${v})$"]` : `["${k}"="${v}"]`; return `nwr${c}["name"]${around};`; });
   else parts = [`nwr["name"~"${nq.name.replace(/[^a-z0-9 ]/g,"")}",i]${around};`];
   return `[out:json][timeout:25][maxsize:67108864];(${parts.join("")});out center tags;`;
 }
@@ -138,6 +140,8 @@ async function overpassOnce(q, ctl){
     const r = await fetch(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}, signal:ctl.signal});
     if(!r.ok) throw new Error("Overpass respondeu "+r.status);
     const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do Overpass");
+    // 200 + lista vazia + "remark" = servidor estourou tempo/memória (falha, não "sem resultados")
+    if(j.remark && /runtime error|timed out|out of memory/i.test(j.remark)) throw new Error("Overpass sobrecarregado: "+j.remark);
     return j;
   };
   // no Vercel usa o proxy do próprio site (os espelhos bloqueiam requisições vindas de *.vercel.app)
@@ -148,8 +152,19 @@ async function overpassOnce(q, ctl){
     return j;
   };
   const web = location.protocol.startsWith("http") && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
-  if(!web) return Promise.any(OVERPASS_EPS.map(tryEp));
-  try{ return await viaProxy(); }catch(e){ if(ctl.signal.aborted) throw e; return Promise.any(OVERPASS_EPS.map(tryEp)); }
+  if(!web) return firstGood(OVERPASS_EPS.map(tryEp));
+  try{ return await viaProxy(); }catch(e){ if(ctl.signal.aborted) throw e; return firstGood(OVERPASS_EPS.map(tryEp)); }
+}
+// aceita o 1º resultado com dados; "vazio" só vale se 2 servidores concordarem (ou for o último a responder)
+function firstGood(tasks){
+  return new Promise((resolve, reject) => {
+    let pending = tasks.length, empties = 0, empty = null, lastErr;
+    tasks.forEach(p => p.then(j => {
+      if(j.elements.length){ resolve(j); return; }
+      empty = empty || j; empties++;
+      if(empties >= 2 || --pending === 0) resolve(empty);
+    }, e => { lastErr = e; if(--pending === 0) empty ? resolve(empty) : reject(lastErr); }));
+  });
 }
 async function overpass(q){
   let last;
@@ -208,8 +223,18 @@ async function search(niche, city, rad){
     if(circle) circle.remove(); circle = L.circle([g.lat,g.lon], {radius:rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
     toast("Buscando em "+(g.name||city)+"… pode levar alguns segundos");
     const data = await overpass(buildQuery(nq, g.lat, g.lon, rad));
+    let elements = data.elements || [];
+    // poucos resultados pelas tags? completa buscando pelo nome (ex.: "Clínica ...")
+    if(nq.r && elements.length < 10){
+      toast("Poucos resultados pelas tags, buscando também pelo nome…");
+      try{
+        const extra = await overpass(buildQuery(nq, g.lat, g.lon, rad, true));
+        const ids = new Set(elements.map(e => e.type+e.id));
+        elements = elements.concat((extra.elements||[]).filter(e => !ids.has(e.type+e.id)));
+      }catch(e){ /* a busca por tags já funcionou; segue só com ela */ }
+    }
     const seen = new Set();
-    leads = (data.elements||[]).map(build).filter(Boolean).filter(l => l.dist <= rad).filter(l => !seen.has(l.id) && seen.add(l.id));
+    leads = elements.map(build).filter(Boolean).filter(l => l.dist <= rad).filter(l => !seen.has(l.id) && seen.add(l.id));
     checkDDD(leads);
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
