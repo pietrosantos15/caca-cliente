@@ -12,7 +12,7 @@ const NICHES = [
  {l:"Cafeterias",k:["cafe","cafeteria"],f:["amenity=cafe"],m:"comida"},
  {l:"Bares",k:["bar","pub","boteco"],f:["amenity=bar|pub"],m:"comida"},
  {l:"Padarias",k:["padaria","confeitaria"],f:["shop=bakery"],m:"comida"},
- {l:"Salão de beleza",k:["salao","beleza","cabeleireiro","cabeleireira","barbearia","barbeiro","manicure","estetica"],f:["shop=hairdresser|beauty"],m:"beleza"},
+ {l:"Salão de beleza",k:["salao","beleza","cabeleireiro","cabeleireira","barbearia","barbeiro","manicure","estetica"],f:["shop=hairdresser|beauty"],g:["salão de beleza","barbearia"],m:"beleza"},
  {l:"Academias",k:["academia","fitness","crossfit"],f:["leisure=fitness_centre"],m:"academia"},
  {l:"Clínicas / médicos",k:["clinica","medico","consultorio","fisioterapia","psicologo","psicologia","nutricionista","saude"],f:["amenity=clinic|doctors","healthcare=clinic|doctor|centre|physiotherapist|psychotherapist|alternative|audiologist|podiatrist|speech_therapist|occupational_therapist|nutrition_counselling"],z:["clínica","consultório","médico"],m:"clinica"},
  {l:"Dentista",k:["dentista","odontologia","dentist"],f:["amenity=dentist","healthcare=dentist"],z:["dentista","odontologia"],m:"clinica"},
@@ -42,7 +42,7 @@ function resolveNiche(q){
   const direct = q.trim().match(/^([\w:]+)=([\w|:-]+)$/);
   if(direct) return {f:[q.trim()], label:q.trim()};
   const hit = NICHES.find(n => norm(n.l) === t) || NICHES.find(n => n.k.some(k => k === t)) || NICHES.find(n => n.k.some(k => t.includes(k) && k.length > 3));
-  if(hit) return {f:hit.f, z:hit.z || [hit.k[0]], label:hit.l.toLowerCase(), m:hit.m};
+  if(hit) return {f:hit.f, z:hit.z || [hit.k[0]], label:hit.l.toLowerCase(), m:hit.m, g:hit.g};
   return {name:t, label:q.trim().toLowerCase()};
 }
 
@@ -251,6 +251,35 @@ function checkDDD(arr){
   arr.forEach(l => { const d = dd(l);
     if(d && d !== top[0] && l.waKind !== "informado por você"){ l.dddWarn = d; l.whatsapp = null; l.waKind = ""; } });
 }
+/* ====== fonte complementar: Google Places (via /api/places, opcional) ====== */
+async function fetchPlaces(nq, g, rad){
+  if(!location.protocol.startsWith("http")) return [];
+  try{
+    const r = await fetch("/api/places", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({queries: nq.g || [nq.label || nq.name], lat:g.lat, lon:g.lon, radius: Math.round(rad*1000)})});
+    if(!r.ok) return [];
+    return (await r.json()).places || [];
+  }catch{ return []; }
+}
+const slug = s => norm(s).replace(/[^a-z0-9]/g, "");
+// junta os resultados do Google aos do OSM: completa quem já existe e acrescenta quem faltava
+function mergePlaces(osmLeads, places){
+  const added = [];
+  places.forEach(p => {
+    const el = {type:"google", id:p.id, lat:p.lat, lon:p.lon, tags:{name:p.name, phone:p.phone, website:p.site}};
+    const l = build(el); if(!l || l.dist > ctx.rad) return;
+    const key = slug(p.name);
+    const twin = osmLeads.find(o => slug(o.name) === key || (hav(o.lat,o.lon,l.lat,l.lon) < 0.05 && (slug(o.name).includes(key) || key.includes(slug(o.name)))));
+    if(twin){
+      if(l.hasSite && !twin.hasSite){ twin.hasSite = true; twin.site = p.site; }
+      if(!twin.phone && l.phone){ twin.phone = l.phone; twin.whatsapp = l.whatsapp; twin.waKind = l.waKind; }
+      return;
+    }
+    l.src = "google"; l.osm = p.maps || l.google; l.addr = (p.addr || "").replace(/, Brasil$/, "").replace(/, \d{5}-\d{3}/, "");
+    added.push(l);
+  });
+  return osmLeads.concat(added);
+}
 const hasContact = l => !!(l.phone || l.whatsapp || l.insta || l.face || l.email);
 
 async function search(niche, city, rad){
@@ -276,6 +305,8 @@ async function search(niche, city, rad){
     if(ovErr && !elements.length) throw new Error("Os servidores do OpenStreetMap estão sobrecarregados. Tente de novo em 1 minuto ou diminua o raio. ("+(ovErr.message||"sem resposta")+")");
     const seen = new Set();
     leads = elements.map(build).filter(Boolean).filter(l => l.dist <= rad).filter(l => !seen.has(l.id) && seen.add(l.id));
+    toast("Buscando também no Google…");
+    leads = mergePlaces(leads, await fetchPlaces(nq, g, rad));
     checkDDD(leads);
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
@@ -391,7 +422,7 @@ function detail(id){
     <div class="acts">${l.whatsapp?`<a class="btn wa" href="${esc(waLink(l))}" target="_blank" rel="noopener">💬 Abrir WhatsApp</a>`:""}
       <button class="btn" id="dCp" type="button">Copiar mensagem</button>
       <a class="btn" href="${esc(l.google)}" target="_blank" rel="noopener">🔍 Google</a>
-      <a class="btn" href="${esc(l.osm)}" target="_blank" rel="noopener">OSM</a>
+      <a class="btn" href="${esc(l.osm)}" target="_blank" rel="noopener">${l.src === "google" ? "Google" : "OSM"}</a>
       ${l.insta?`<a class="btn" href="${esc(l.insta)}" target="_blank" rel="noopener">Instagram</a>`:""}${l.face?`<a class="btn" href="${esc(l.face)}" target="_blank" rel="noopener">Facebook</a>`:""}
       ${l.site?`<a class="btn" href="${esc(l.site)}" target="_blank" rel="noopener">Site atual</a>`:""}</div>
     <div class="acts"><button class="pri btn" id="dSave" type="button">Salvar</button><button class="btn" id="dClose" type="button">Fechar</button></div>`);
