@@ -237,7 +237,7 @@ function build(el){
   if(insta || face) score += 8; if(email) score += 5; if(t.opening_hours) score += 5; if(addr) score += 5; if(dist <= ctx.rad/2) score += 5;
   if(hasSite) score -= 40;
   score = Math.max(0, Math.min(100, score));
-  const l = {id: el.type[0]+el.id, name:t.name, lat, lon, dist, addr, phone, whatsapp, waKind, insta, face, email, hours:t.opening_hours||"", hasSite, site:t.website||t["contact:website"]||t.url||"",
+  const l = {id: el.type[0]+el.id, name:t.name, lat, lon, dist, addr, street:t["addr:street"]||"", hn:!!t["addr:housenumber"], phone, whatsapp, waKind, insta, face, email, hours:t.opening_hours||"", hasSite, site:t.website||t["contact:website"]||t.url||"",
     score, temp: score >= 70 ? "hot" : score >= 45 ? "warm" : "cold", city:ctx.cityShort, nicho:ctx.label, tplKey:ctx.m,
     osm:`https://www.openstreetmap.org/${el.type}/${el.id}`, google:"https://www.google.com/search?q="+encodeURIComponent(`"${t.name}" ${ctx.cityShort}`)};
   return applyManual(l);
@@ -272,10 +272,11 @@ function mergePlaces(osmLeads, places){
     const twin = osmLeads.find(o => slug(o.name) === key || (hav(o.lat,o.lon,l.lat,l.lon) < 0.05 && (slug(o.name).includes(key) || key.includes(slug(o.name)))));
     if(twin){
       if(l.hasSite && !twin.hasSite){ twin.hasSite = true; twin.site = p.site; }
+      if(!twin.hn && /\d/.test(p.addr||'')){ twin.addr = (p.addr||'').replace(/, Brasil$/, '').replace(/, \d{5}-\d{3}/, ''); twin.hn = true; }
       if(!twin.phone && l.phone){ twin.phone = l.phone; twin.whatsapp = l.whatsapp; twin.waKind = l.waKind; }
       return;
     }
-    l.src = "google"; l.osm = p.maps || l.google; l.addr = (p.addr || "").replace(/, Brasil$/, "").replace(/, \d{5}-\d{3}/, "");
+    l.src = "google"; l.hn = true; l.osm = p.maps || l.google; l.addr = (p.addr || "").replace(/, Brasil$/, "").replace(/, \d{5}-\d{3}/, "");
     added.push(l);
   });
   return osmLeads.concat(added);
@@ -313,6 +314,7 @@ async function search(niche, city, rad){
     h.unshift({niche, city, rad}); store.set("gc_hist", h.slice(0,10));
     toast(ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
     renderAll();
+    fillNumbers();
   }catch(e){ toast(e.message || String(e), true); }
   finally{ btn.disabled = false; }
 }
@@ -327,6 +329,35 @@ function visible(){
   if(tempSel.hot || tempSel.warm || tempSel.cold) a = a.filter(l => tempSel[l.temp]);
   const by = $("sort").value;
   return a.sort((x,y) => by==="dist" ? x.dist-y.dist : by==="name" ? x.name.localeCompare(y.name) : y.score-x.score);
+}
+/* ====== completa o número da rua (OSM às vezes não tem) ====== */
+let numTok = 0;
+const revCache = store.get("gc_rev", {});
+async function fillNumbers(){
+  const tok = ++numTok;
+  const todo = leads.filter(l => !l.hn && l.dist != null);
+  for(const l of todo){
+    if(tok !== numTok) return;
+    const key = l.lat.toFixed(5)+","+l.lon.toFixed(5);
+    if(!(key in revCache)){
+      try{
+        const r = await fetchT("https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=pt-BR&lat="+l.lat+"&lon="+l.lon, {}, 10000);
+        if(!r.ok) throw 0;
+        const a = (await r.json()).address || {};
+        revCache[key] = a.house_number ? {n:a.house_number, road:a.road||"", sub:a.suburb||a.neighbourhood||"", city:a.city||a.town||a.village||""} : null;
+        store.set("gc_rev", revCache);
+      }catch{ await new Promise(r => setTimeout(r, 2500)); continue; }
+      await new Promise(r => setTimeout(r, 1100));
+    }
+    const c = revCache[key];
+    if(!c || tok !== numTok) continue;
+    // só aceita se a rua bate com a do cadastro (ou se o cadastro não tinha rua)
+    if(l.street && norm(l.street) !== norm(c.road)) continue;
+    const city = l.addr.split(" · ").pop();
+    l.addr = [[c.road || l.street, c.n].filter(Boolean).join(", "), c.sub, l.street ? "" : c.city].filter(Boolean).join(" · ") + (l.street && l.addr.includes(" · ") ? " · " + l.addr.split(" · ").slice(1).join(" · ") : "") + " (nº aprox.)";
+    l.hn = true;
+    const el = document.querySelector('.card[data-id="'+l.id+'"] .addr'); if(el) el.textContent = (l.addr || "Endereço não informado") + " · " + l.dist.toFixed(1) + " km";
+  }
 }
 function renderAll(){ renderList(); renderMap(); renderKanban(); renderDash(); }
 
@@ -343,7 +374,7 @@ function renderList(){
   $("fire").textContent = `🚀 Modo disparo (${q})`; $("fire").disabled = !q;
   $("list").innerHTML = vis.map(l => `<div class="card ${l.id===selId?"sel":""} ${stageOf(l)!=="novo"?"done":""}" data-id="${l.id}">
     <div class="row1"><b>${esc(l.name)}</b><span class="temp"><span class="tb ${l.temp}">${{hot:"Quente",warm:"Morno",cold:"Frio"}[l.temp]}</span>${l.score}</span></div>
-    <div class="addr">${esc(l.addr || "Endereço não informado")} · ${l.dist.toFixed(1)} km</div>
+    <div class="addr">${esc(l.addr || "Endereço não informado")}${l.addr && !l.hn ? " <i title='O mapa não tem o número deste endereço. Use o botão Buscar para ver no Google.'>(sem nº)</i>" : ""} · ${l.dist.toFixed(1)} km</div>
     ${l.phone ? `<div>📞 ${esc(fmtPhone(l.phone, cfg.cc))}${l.dddWarn ? ` <span class="tag" title="O DDD deste número é diferente do predominante na região. Confira antes de ligar.">⚠ DDD ${esc(l.dddWarn)} diferente da região</span>` : ""}</div>` : ""}
     <div class="acts">
       ${l.whatsapp ? `<a class="btn wa" data-act="wa" href="${esc(waLink(l))}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ""}
