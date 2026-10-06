@@ -472,8 +472,10 @@ function editMsg(){
   const m = modal(`<h3>Mensagem do WhatsApp</h3>
     <div class="two"><label>Seu nome / marca<input id="cMe" value="${esc(cfg.me)}" placeholder="Seu nome"></label><label>DDI do país<input id="cCc" value="${esc(cfg.cc)}"></label></div>
     <label>Modelo — variáveis: {nome} {nicho} {cidade} {eu}<textarea id="cTpl" rows="6">${esc(cfg.tpl)}</textarea></label>
-    <div class="acts"><button class="pri btn" id="cSave" type="button">Salvar</button><button class="btn" id="cClose" type="button">Cancelar</button></div>`);
+    <div class="addr">Dica: deixando o modelo igual ao padrão, o app usa um texto diferente para cada tipo de negócio (clínica, salão, restaurante…). Se você alterar o texto, ele vale para todos.</div>
+    <div class="acts"><button class="pri btn" id="cSave" type="button">Salvar</button><button class="btn" id="cReset" type="button">Restaurar modelo padrão</button><button class="btn" id="cClose" type="button">Cancelar</button></div>`);
   m.querySelector("#cClose").onclick = () => m.remove();
+  m.querySelector("#cReset").onclick = () => { m.querySelector("#cTpl").value = DEFAULT_TPL; };
   m.querySelector("#cSave").onclick = () => { cfg = {me:m.querySelector("#cMe").value.trim(), cc:m.querySelector("#cCc").value.trim()||"55", tpl:m.querySelector("#cTpl").value}; saveCfg(); m.remove(); renderAll(); };
 }
 function history(){
