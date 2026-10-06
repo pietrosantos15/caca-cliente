@@ -304,11 +304,12 @@ async function search(niche, city, rad){
         elements = elements.concat(extra.filter(e => !ids.has(e.type+e.id)));
       }catch(e){ /* sem a fonte reserva, segue só com o que o Overpass trouxe */ }
     }
-    if(ovErr && !elements.length) throw new Error("Os servidores do OpenStreetMap estão sobrecarregados. Tente de novo em 1 minuto ou diminua o raio. ("+(ovErr.message||"sem resposta")+")");
     const seen = new Set();
     leads = elements.map(build).filter(Boolean).filter(l => l.dist <= rad).filter(l => !seen.has(l.id) && seen.add(l.id));
     toast("Buscando também no Google…");
     leads = mergePlaces(leads, await fetchPlaces(nq, g, rad));
+    // OSM fora do ar e sem nada do Google (chave não configurada): aí sim avisa
+    if(ovErr && !leads.length) throw new Error("Os servidores do OpenStreetMap estão sobrecarregados e a fonte do Google não está ativa. Tente de novo em alguns minutos. ("+(ovErr.message||"sem resposta")+")");
     checkDDD(leads);
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
