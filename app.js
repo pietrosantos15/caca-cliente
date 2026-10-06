@@ -94,14 +94,14 @@ if(!cfg.me) cfg.me = "Pietro";
 if(cfg.tpl === OLD_TPL || cfg.tpl === PREV_TPL || cfg.tpl === PREV3_TPL){ cfg.tpl = DEFAULT_TPL; store.set("gc_cfg", cfg); }
 let leads = [], ctx = null, selId = null, filt = {wa:false, ig:false, em:false, site:false}, tempSel = {hot:false, warm:false, cold:false}, view = "map";
 const stageOf = l => S[l.id]?.stage || "novo";
-const saveS = () => store.set("gc_state", S);
-const saveCfg = () => store.set("gc_cfg", cfg);
+const saveS = () => { store.set("gc_state", S); cloudSoon(); };
+const saveCfg = () => { cfg.t = Date.now(); store.set("gc_cfg", cfg); cloudSoon(); };
 const tplFor = l => (cfg.tpl === DEFAULT_TPL && NICHE_TPL[l.tplKey]) || cfg.tpl;
 const msgFor = l => tplFor(l).replaceAll("{nome}", l.name).replaceAll("{nicho}", l.nicho || "comércios").replaceAll("{cidade}", l.city || "sua cidade").replaceAll("{eu}", cfg.me || "Pietro");
 const waLink = l => l.whatsapp ? `https://wa.me/${l.whatsapp}?text=${encodeURIComponent(msgFor(l))}` : "";
 function setStage(l, stage){
-  S[l.id] = Object.assign(S[l.id] || {}, {stage, snap:l});
-  if(stage === "novo" && !S[l.id].notes && !S[l.id].manual) delete S[l.id];
+  S[l.id] = Object.assign(S[l.id] || {}, {stage, snap:l, u:Date.now()}); delete S[l.id].del;
+  if(stage === "novo" && !S[l.id].notes && !S[l.id].manual) S[l.id] = {stage:"novo", del:1, u:Date.now()};   // marca como apagado (e não some) para o apagar também valer no banco online
   saveS();
 }
 function applyManual(l){
@@ -142,7 +142,8 @@ async function saveSearch(){
   try{
     const old = await DB.get(curSearch.id);
     if(savePartial && old && old.leads.length > leads.length) return;   // lista parcial não substitui uma completa
-    await DB.put({...curSearch, ctx, leads, t:Date.now()});
+    const rec = {...curSearch, ctx, leads, t:Date.now()};
+    await DB.put(rec); cloudPutSearch(rec);
   }catch(e){ if(!saveSearch.warned){ saveSearch.warned = 1; toast("Não foi possível guardar esta busca neste navegador (armazenamento bloqueado ou cheio).", true); } }
 }
 function openSaved(rec){
@@ -153,6 +154,84 @@ function openSaved(rec){
   if(circle) circle.remove(); circle = L.circle([ctx.lat, ctx.lon], {radius:rec.rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
   toast("Busca salva em "+new Date(rec.t).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"})+" — mesmos dados de quando você pesquisou. Use “Atualizar” em Buscas salvas para pesquisar de novo.");
   renderAll(); fillNumbers().then(saveSearch);
+}
+
+
+/* ====== banco online (api/db.js): salva buscas e estado para acessar de qualquer computador ====== */
+const pack = async obj => {
+  const txt = JSON.stringify(obj);
+  if(typeof CompressionStream === "undefined") return "j:" + txt;
+  const buf = await new Response(new Blob([txt]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+  let bin = ""; const u = new Uint8Array(buf); for(let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return "z:" + btoa(bin);
+};
+const unpack = async str => {
+  if(str.startsWith("j:")) return JSON.parse(str.slice(2));
+  const bin = atob(str.slice(2)), u = Uint8Array.from(bin, c => c.charCodeAt(0));
+  return JSON.parse(await new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream("gzip"))).text());
+};
+const Cloud = {
+  key: store.get("gc_key", ""), state: "off", err: "",
+  on(){ return !!this.key; },
+  async call(op, body){
+    const r = await fetchT("/api/db", {method:"POST", headers:{"Content-Type":"application/json", "x-garimpo-key":this.key}, body:JSON.stringify({op, ...body})}, 25000);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ const e = new Error(j.error || ("Servidor respondeu "+r.status)); e.status = r.status; throw e; }
+    return j;
+  },
+  set(state, err){ this.state = state; this.err = err ? (err.message || String(err)) : ""; const b = $("cloud"); if(b) b.textContent = state === "ok" ? "☁️ Banco online: sincronizado" : state === "err" ? "⚠️ Banco online: erro (clique)" : state === "busy" ? "☁️ Sincronizando…" : "☁️ Conectar banco online"; },
+};
+const metaOf = r => ({id:r.id, niche:r.niche, city:r.city, rad:r.rad, t:r.t, label:r.ctx?.label || r.niche, n:r.leads.length, nsite:r.leads.filter(l => !l.hasSite).length});
+async function cloudPutSearch(rec){
+  if(!Cloud.on()) return;
+  try{ Cloud.set("busy"); await Cloud.call("put", {id:rec.id, meta:metaOf(rec), blob:await pack({ctx:rec.ctx, leads:rec.leads})}); Cloud.set("ok"); }
+  catch(e){ Cloud.set("err", e); if(e.status === 413) toast(e.message, true); }
+}
+const mergeS = (a, b) => { const o = {}; for(const id of new Set([...Object.keys(a), ...Object.keys(b)])){ const x = a[id], y = b[id]; o[id] = !x ? y : !y ? x : ((y.u||0) > (x.u||0) ? y : x); } return o; };
+let syncTimer = null;
+function cloudSoon(){ if(!Cloud.on()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncState, 1500); }
+async function syncState(){
+  if(!Cloud.on()) return;
+  try{
+    Cloud.set("busy");
+    const r = await Cloud.call("state_get"); let rem = {S:{}};
+    if(r.blob) rem = await unpack(r.blob);
+    const merged = mergeS(S, rem.S || {}), changed = JSON.stringify(merged) !== JSON.stringify(S);
+    S = merged; store.set("gc_state", S);
+    let cfgChanged = false;
+    if((rem.cfgT || 0) > (cfg.t || 0) && rem.cfg){ cfg = {...rem.cfg, t:rem.cfgT}; store.set("gc_cfg", cfg); cfgChanged = true; }
+    await Cloud.call("state_put", {blob: await pack({S, cfg:{me:cfg.me, cc:cfg.cc, tpl:cfg.tpl}, cfgT:cfg.t || 0})});
+    Cloud.set("ok");
+    if((changed || cfgChanged) && leads.length) renderAll(); else if(changed) { renderKanban(); renderDash(); }
+  }catch(e){ Cloud.set("err", e); }
+}
+async function cloudUploadLocal(){   // envia ao banco online as buscas que só existem neste computador
+  if(!Cloud.on()) return;
+  try{
+    const have = new Map((await Cloud.call("list")).items.map(m => [m.id, m.t]));
+    for(const r of await DB.all()) if(!have.has(r.id) || have.get(r.id) < r.t) await cloudPutSearch(r);
+  }catch(e){ Cloud.set("err", e); }
+}
+function cloudDialog(){
+  const m = modal(""), box = m.firstChild;
+  const draw = (msg) => {
+    box.innerHTML = `<h3>☁️ Banco online</h3>
+      <div class="addr">${Cloud.on() ? "Conectado. Suas buscas salvas, status, notas e modelo de mensagem ficam sincronizados entre todos os computadores onde você entrar com a mesma senha." : "Digite a senha do banco para acessar suas buscas salvas de qualquer computador."}</div>
+      ${Cloud.state === "err" ? `<div class="addr" style="color:#ef4444">Último erro: ${esc(Cloud.err)}</div>` : ""}
+      ${msg ? `<div class="addr" style="color:#ef4444;white-space:pre-line">${esc(msg)}</div>` : ""}
+      <label>Senha (a mesma da variável GARIMPO_SENHA na Vercel)<input id="cKey" type="password" autocomplete="current-password" value="${Cloud.on() ? "••••••••" : ""}" ${Cloud.on() ? "disabled" : ""}></label>
+      <div class="acts">${Cloud.on() ? `<button class="pri btn" id="cSync" type="button">Sincronizar agora</button><button class="btn" id="cOff" type="button">Desconectar</button>` : `<button class="pri btn" id="cOn" type="button">Conectar</button>`}<button class="btn" id="cX" type="button">Fechar</button></div>`;
+    box.querySelector("#cX").onclick = () => m.remove();
+    if(box.querySelector("#cOff")) box.querySelector("#cOff").onclick = () => { Cloud.key = ""; store.set("gc_key", ""); Cloud.set("off"); draw(); };
+    if(box.querySelector("#cSync")) box.querySelector("#cSync").onclick = async () => { await syncState(); await cloudUploadLocal(); draw(); };
+    if(box.querySelector("#cOn")) box.querySelector("#cOn").onclick = async () => {
+      const k = box.querySelector("#cKey").value; if(!k) return;
+      Cloud.key = k;
+      try{ Cloud.set("busy"); await Cloud.call("ping"); store.set("gc_key", k); Cloud.set("ok"); m.remove(); toast("Conectado ao banco online."); await syncState(); await cloudUploadLocal(); }
+      catch(e){ Cloud.key = ""; Cloud.set("off"); draw(e.status === 501 ? e.message + "\n\nNa Vercel: Storage > Create > Upstash Redis (conectar ao projeto) e Settings > Environment Variables > GARIMPO_SENHA. Depois faça Redeploy." : e.message); }
+    };
+  };
+  draw();
 }
 
 /* ====== busca ====== */
@@ -516,8 +595,8 @@ function detail(id){
   m.querySelector("#dCp").onclick = e => navigator.clipboard.writeText(msgFor(l)).then(() => e.target.textContent = "Copiado ✓");
   m.querySelector("#dSave").onclick = () => {
     const st = m.querySelector("#dSt").value, man = m.querySelector("#dMan").value.trim(), notes = m.querySelector("#dNotes").value.trim();
-    S[l.id] = Object.assign(S[l.id] || {}, {stage:st, manual:man, notes, snap:l});
-    if(st === "novo" && !man && !notes) delete S[l.id];
+    S[l.id] = Object.assign(S[l.id] || {}, {stage:st, manual:man, notes, snap:l, u:Date.now()}); delete S[l.id].del;
+    if(st === "novo" && !man && !notes) S[l.id] = {stage:"novo", del:1, u:Date.now()};
     saveS();
     const live = leads.find(x => x.id === l.id); if(live) applyManual(live);
     m.remove(); renderAll();
@@ -534,25 +613,52 @@ function editMsg(){
   m.querySelector("#cSave").onclick = () => { cfg = {me:m.querySelector("#cMe").value.trim(), cc:m.querySelector("#cCc").value.trim()||"55", tpl:m.querySelector("#cTpl").value}; saveCfg(); m.remove(); renderAll(); };
 }
 async function history(){
-  let recs = []; try{ recs = await DB.all(); }catch(e){ /* sem IndexedDB */ }
-  const have = new Set(recs.map(r => r.id));
+  const m = modal("<h3>📁 Buscas salvas</h3><div class='addr'>Carregando…</div>"); const box = m.firstChild; box.style.width = "min(680px,100%)";
+  let locals = []; try{ locals = await DB.all(); }catch(e){ /* sem IndexedDB */ }
+  const items = new Map();
+  locals.forEach(r => items.set(r.id, {...metaOf(r), local:true}));
+  let cloudErr = null;
+  if(Cloud.on()){
+    try{
+      const list = (await Cloud.call("list")).items;
+      list.forEach(c => { const o = items.get(c.id); items.set(c.id, o && o.t > c.t ? {...o, cloud:false} : {...c, local:!!o, cloud:true}); });
+      locals.filter(r => !list.some(c => c.id === r.id && c.t >= r.t)).forEach(r => cloudPutSearch(r));   // só existia aqui: sobe para o banco
+      Cloud.set("ok");
+    }catch(e){ cloudErr = e; Cloud.set("err", e); }
+  }
+  const have = new Set(items.keys());
   const legacy = store.get("gc_hist", []).filter(x => !have.has(searchId(x.niche, x.city, x.rad)));   // buscas antigas, de antes de existir o salvamento
-  const m = modal(""); const box = m.firstChild; box.style.width = "min(680px,100%)";
   const fmt = t => new Date(t).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"});
+  const getRec = async it => {
+    const loc = it.local ? await DB.get(it.id) : null;
+    if(loc && (!it.cloud || loc.t >= it.t)) return loc;
+    const {blob} = await Cloud.call("get", {id:it.id}); const d = await unpack(blob);
+    const rec = {id:it.id, niche:it.niche, city:it.city, rad:it.rad, t:it.t, ctx:d.ctx, leads:d.leads};
+    try{ await DB.put(rec); }catch{}
+    return rec;
+  };
   const draw = () => {
     const q = norm(box.querySelector("#sq")?.value || "");
-    const rows = recs.filter(r => !q || norm(r.niche+" "+r.city+" "+(r.ctx?.label||"")).includes(q)).sort((a,b) => b.t - a.t);
-    const groups = {}; rows.forEach(r => (groups[r.ctx?.label || r.niche] ||= []).push(r));
+    const rows = [...items.values()].filter(r => !q || norm(r.niche+" "+r.city+" "+r.label).includes(q)).sort((a,b) => b.t - a.t);
+    const groups = {}; rows.forEach(r => (groups[r.label] ||= []).push(r));
     const html = Object.keys(groups).sort((a,b) => a.localeCompare(b,"pt-BR")).map(g => `<div class="sg"><b>${esc(g.charAt(0).toUpperCase()+g.slice(1))}</b> <span class="addr">${groups[g].length} busca${groups[g].length>1?"s":""}</span>
-      ${groups[g].map(r => { const n = r.leads.filter(l => !l.hasSite).length; return `<div class="hist" data-id="${esc(r.id)}"><span><b>${esc(r.city)}</b> · ${r.rad} km<br><span class="addr">${n} sem site (de ${r.leads.length}) · salva em ${fmt(r.t)}</span></span>
-        <span class="acts"><button class="btn" data-a="open" type="button">Abrir</button><button class="btn" data-a="upd" type="button" title="Pesquisar de novo">Atualizar</button><button class="btn" data-a="del" type="button" title="Excluir">✕</button></span></div>`; }).join("")}</div>`).join("");
+      ${groups[g].map(r => `<div class="hist" data-id="${esc(r.id)}"><span><b>${esc(r.city)}</b> · ${r.rad} km<br><span class="addr">${r.nsite} sem site (de ${r.n}) · salva em ${fmt(r.t)}${r.cloud ? " · ☁️" : ""}</span></span>
+        <span class="acts"><button class="btn" data-a="open" type="button">Abrir</button><button class="btn" data-a="upd" type="button" title="Pesquisar de novo">Atualizar</button><button class="btn" data-a="del" type="button" title="Excluir">✕</button></span></div>`).join("")}</div>`).join("");
     const old = !q && legacy.length ? `<div class="sg"><b>Sem dados salvos</b> <span class="addr">pesquisadas antes do salvamento existir; busque de novo para guardar</span>${legacy.map((x,i) => `<div class="hist" data-l="${i}"><span><b>${esc(x.niche)}</b> · ${esc(x.city)} · ${x.rad} km</span><span class="acts"><button class="btn" type="button">Buscar de novo</button></span></div>`).join("")}</div>` : "";
-    box.querySelector("#sl").innerHTML = html + old || "<div class='addr'>Nenhuma busca salva ainda. Cada busca que você fizer aparece aqui, com a lista completa.</div>";
+    const aviso = !Cloud.on() ? `<div class="addr">Salvas só neste computador. <a href="#" id="goCloud">Conecte o banco online</a> para acessar de qualquer lugar.</div>` : cloudErr ? `<div class="addr" style="color:#ef4444">Banco online indisponível agora (${esc(cloudErr.message)}); mostrando só o que está neste computador.</div>` : "";
+    box.querySelector("#sl").innerHTML = (html + old || "<div class='addr'>Nenhuma busca salva ainda. Cada busca que você fizer aparece aqui, com a lista completa.</div>") + aviso;
+    const gc = box.querySelector("#goCloud"); if(gc) gc.onclick = e => { e.preventDefault(); m.remove(); cloudDialog(); };
     box.querySelectorAll(".hist[data-id]").forEach(el => el.onclick = async e => {
-      const r = recs.find(x => x.id === el.dataset.id), a = e.target.dataset?.a || "open"; if(!r) return;
-      if(a === "del"){ e.stopPropagation(); if(!confirm("Excluir esta busca salva ("+r.niche+" em "+r.city+")?")) return; try{ await DB.del(r.id); }catch{} recs = recs.filter(x => x.id !== r.id); draw(); return; }
-      m.remove();
-      if(a === "upd") search(r.niche, r.city, r.rad); else openSaved(r);
+      const it = items.get(el.dataset.id), a = e.target.dataset?.a || "open"; if(!it) return;
+      if(a === "del"){
+        e.stopPropagation(); if(!confirm("Excluir esta busca salva ("+it.niche+" em "+it.city+")"+(Cloud.on() ? " de todos os computadores" : "")+"?")) return;
+        try{ await DB.del(it.id); }catch{}
+        if(Cloud.on()) try{ await Cloud.call("del", {id:it.id}); }catch(err){ toast("Não consegui excluir do banco online: "+err.message, true); }
+        items.delete(it.id); draw(); return;
+      }
+      if(a === "upd"){ m.remove(); search(it.niche, it.city, it.rad); return; }
+      el.style.opacity = .5;
+      try{ const rec = await getRec(it); m.remove(); openSaved(rec); }catch(err){ el.style.opacity = 1; toast("Não consegui abrir esta busca: "+err.message, true); }
     });
     box.querySelectorAll(".hist[data-l]").forEach(el => el.onclick = () => { const x = legacy[+el.dataset.l]; $("niche").value = x.niche; $("city").value = x.city; $("radius").value = x.rad; $("rv").textContent = x.rad; m.remove(); search(x.niche, x.city, x.rad); });
   };
@@ -596,7 +702,7 @@ $("xlsx").onclick = () => {
 $("f").onsubmit = e => { e.preventDefault(); search($("niche").value.trim(), $("city").value.trim(), +$("radius").value); };
 $("radius").oninput = () => $("rv").textContent = $("radius").value;
 $("sort").onchange = renderAll;
-$("editMsg").onclick = editMsg; $("hist").onclick = history; $("fire").onclick = fireMode;
+$("editMsg").onclick = editMsg; $("hist").onclick = history; $("cloud").onclick = cloudDialog; $("fire").onclick = fireMode;
 $("theme").onclick = () => { const d = document.documentElement.dataset.theme !== "dark"; document.documentElement.dataset.theme = d ? "dark" : "light"; $("theme").textContent = d ? "☀️" : "🌙"; store.set("gc_theme", d ? "dark" : "light"); };
 if(store.get("gc_theme") === "dark") $("theme").click();
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
@@ -625,3 +731,4 @@ $("kanban").addEventListener("drop", e => {
   const c = e.target.closest(".col"); if(!c || !dragId) return; e.preventDefault();
   const l = findLead(dragId); if(l){ setStage(l, c.dataset.stage); renderAll(); } dragId = null;
 });
+Cloud.set(Cloud.on() ? "busy" : "off"); if(Cloud.on()) syncState();
