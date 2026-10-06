@@ -912,4 +912,40 @@ function importDialog(){
 }
 
 $("imp").onclick = importDialog;
+
+/* ====== Leads prontos: lista pesquisada previamente (leads-prontos.json), só para consulta ====== */
+let readyCache = null;
+async function readyDialog(){
+  const m = modal("<h3>📚 Leads prontos</h3><div class='addr'>Carregando…</div>"), box = m.firstChild; box.style.width = "min(640px,100%)";
+  try{ if(!readyCache){ const r = await fetch("leads-prontos.json?v=1"); if(!r.ok) throw 0; readyCache = await r.json(); } }
+  catch(e){ box.innerHTML = "<h3>📚 Leads prontos</h3><div class='addr'>Não consegui carregar leads-prontos.json.</div>"; return; }
+  const by = {}; readyCache.forEach(l => (by[l.nicho] = by[l.nicho] || []).push(l));
+  const names = Object.keys(by).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  box.innerHTML = `<h3>📚 Leads prontos — Sorocaba/SP</h3>
+    <div class="addr">${readyCache.length} empresas pesquisadas na web (diretórios públicos). <b>“Quente” = nenhum site próprio apareceu</b>; não foi confirmado um a um. Confira no Google/Instagram antes de chamar.</div>
+    <label>Nicho <select id="rN" style="width:100%"><option value="">Todos os nichos (${readyCache.length})</option>${names.map(n => `<option value="${esc(n)}">${esc(n)} (${by[n].length})</option>`).join("")}</select></label>
+    <div style="margin:10px 0;display:flex;gap:14px;flex-wrap:wrap"><label><input type="checkbox" id="rH" checked> 🔥 Quentes</label><label><input type="checkbox" id="rW" checked> 🌤️ Mornos</label><label><input type="checkbox" id="rC" checked> ❄️ Frios</label><label><input type="checkbox" id="rT"> só com telefone</label></div>
+    <div class="addr" id="rP"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="pill" id="rX" type="button">Fechar</button><button class="pill on" id="rGo" type="button">Abrir lista</button></div>`;
+  const pick = () => readyCache.filter(l => (!box.querySelector("#rN").value || l.nicho === box.querySelector("#rN").value) && ((l.temp === "hot" && box.querySelector("#rH").checked) || (l.temp === "warm" && box.querySelector("#rW").checked) || (l.temp === "cold" && box.querySelector("#rC").checked)) && (!box.querySelector("#rT").checked || l.phone || l.whatsapp));
+  const prev = () => { box.querySelector("#rP").textContent = pick().length + " leads com esses filtros."; };
+  box.querySelectorAll("select,input").forEach(e => e.onchange = prev); prev();
+  box.querySelector("#rX").onclick = () => m.remove();
+  box.querySelector("#rGo").onclick = () => {
+    const sel = box.querySelector("#rN").value, cc = cfg.cc || "55";
+    leads = pick().map(r => {
+      const phone = r.phone ? normPhone(r.phone, cc) : null, mob = phone && isBRMobile(phone) ? phone : null, wa = r.whatsapp || mob || null;
+      const addr = [r.addr, r.bairro, r.city + "/SP"].filter(Boolean).join(" · ");
+      return {id:r.id, name:r.name, lat:null, lon:null, dist:null, addr, street:"", hn:true, phone, whatsapp:wa, waKind:r.whatsapp ? "confirmado" : mob ? "provável (celular)" : "",
+        insta:r.instagram || "", face:"", email:"", hours:"", hasSite:!!r.site, site:r.site || "", score:r.score, temp:r.temp, city:r.city, nicho:r.nicho, tplKey:resolveNiche(r.nicho).m,
+        extra:r.reason, src:"pronto", osm:"", google:"https://www.google.com/search?q=" + encodeURIComponent(`"${r.name}" ${r.city}`)};
+    });
+    if(!leads.length) return prev();
+    numTok++; selId = null; if(circle){ circle.remove(); circle = null; }
+    ctx = {lat:null, lon:null, rad:0, label:(sel || "vários nichos").toLowerCase(), m:sel ? resolveNiche(sel).m : "", cityShort:"Sorocaba", import:true};
+    curSearch = null; savePartial = false; m.remove(); renderAll();
+    toast(leads.length + " leads prontos abertos. Os status e anotações que você marcar ficam salvos normalmente.");
+  };
+}
+$("ready").onclick = readyDialog;
 Cloud.set(Cloud.on() ? "busy" : "off"); if(Cloud.on()) syncState();
