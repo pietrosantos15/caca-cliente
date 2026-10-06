@@ -159,8 +159,11 @@ function openSaved(rec){
   numTok++;
   $("niche").value = rec.niche; $("city").value = rec.city; $("radius").value = rec.rad; $("rv").textContent = rec.rad;
   ctx = rec.ctx; leads = rec.leads; selId = null; curSearch = {id:rec.id, niche:rec.niche, city:rec.city, rad:rec.rad}; savePartial = false;
-  map.setView([ctx.lat, ctx.lon], rec.rad > 15 ? 10 : rec.rad > 8 ? 11 : rec.rad > 3 ? 12 : 13);
-  if(circle) circle.remove(); circle = L.circle([ctx.lat, ctx.lon], {radius:rec.rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
+  if(circle){ circle.remove(); circle = null; }
+  if(ctx.lat != null){
+    map.setView([ctx.lat, ctx.lon], rec.rad > 15 ? 10 : rec.rad > 8 ? 11 : rec.rad > 3 ? 12 : 13);
+    circle = L.circle([ctx.lat, ctx.lon], {radius:rec.rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
+  }
   toast("Busca salva em "+new Date(rec.t).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"})+" — mesmos dados de quando você pesquisou. Use “Atualizar” em Buscas salvas para pesquisar de novo.");
   renderAll(); fillNumbers().then(saveSearch);
 }
@@ -493,7 +496,7 @@ function visible(){
   // temperatura: sem nenhuma marcada mostra todas; marcando, mostra só as escolhidas
   if(tempSel.hot || tempSel.warm || tempSel.cold) a = a.filter(l => tempSel[l.temp]);
   const by = $("sort").value;
-  return a.sort((x,y) => by==="dist" ? x.dist-y.dist : by==="name" ? x.name.localeCompare(y.name) : y.score-x.score);
+  return a.sort((x,y) => by==="dist" ? (x.dist ?? 1e9)-(y.dist ?? 1e9) : by==="name" ? x.name.localeCompare(y.name) : y.score-x.score);
 }
 /* ====== completa o número da rua (OSM às vezes não tem) ====== */
 let numTok = 0;
@@ -534,12 +537,13 @@ function renderList(){
   document.querySelectorAll("#tempChips .chip").forEach(c => c.querySelector("span").textContent = base.filter(l => l.temp === c.dataset.t).length);
   const vis = visible(), noSite = leads.filter(l => !l.hasSite);
   const rich = noSite.filter(hasContact).length;
-  $("stats").innerHTML = `<b>${noSite.length}</b> sem site (de ${leads.length} no raio) · <b>${rich}/${noSite.length}</b> com contato`;
+  $("stats").innerHTML = `<b>${noSite.length}</b> sem site (de ${leads.length} ${ctx?.import ? "na lista" : "no raio"}) · <b>${rich}/${noSite.length}</b> com contato`;
   const q = vis.filter(l => l.whatsapp && stageOf(l) === "novo").length;
   $("fire").textContent = `🚀 Modo disparo (${q})`; $("fire").disabled = !q;
   $("list").innerHTML = vis.map(l => `<div class="card ${l.id===selId?"sel":""} ${stageOf(l)!=="novo"?"done":""}" data-id="${l.id}">
     <div class="row1"><b>${esc(l.name)}</b><span class="temp"><span class="tb ${l.temp}">${{hot:"Quente",warm:"Morno",cold:"Frio"}[l.temp]}</span>${l.score}</span></div>
-    <div class="addr">${esc(l.addr || "Endereço não informado")}${l.addr && !l.hn ? " <i title='O mapa não tem o número deste endereço. Use o botão Buscar para ver no Google.'>(sem nº)</i>" : ""} · ${l.dist.toFixed(1)} km</div>
+    <div class="addr">${esc(l.addr || "Endereço não informado")}${l.addr && !l.hn ? " <i title='O mapa não tem o número deste endereço. Use o botão Buscar para ver no Google.'>(sem nº)</i>" : ""}${l.dist != null ? " · " + l.dist.toFixed(1) + " km" : ""}</div>
+    ${l.extra ? `<div class="addr">${esc(l.extra)}</div>` : ""}
     ${l.phone ? `<div>📞 ${esc(fmtPhone(l.phone, cfg.cc))}${l.dddWarn ? ` <span class="tag" title="O DDD deste número é diferente do predominante na região. Confira antes de ligar.">⚠ DDD ${esc(l.dddWarn)} diferente da região</span>` : ""}</div>` : ""}
     <div class="acts">
       ${l.whatsapp ? `<a class="btn wa" data-act="wa" href="${esc(waLink(l))}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ""}
@@ -556,6 +560,7 @@ function renderList(){
 function renderMap(){
   layer.clearLayers(); for(const k in markers) delete markers[k];
   visible().forEach(l => {
+    if(l.lat == null) return;   // lista importada: sem coordenadas
     const mk = L.circleMarker([l.lat,l.lon], {radius:l.id===selId?10:7, color:l.id===selId?"#16a34a":"#fff", weight:2, fillColor:stageOf(l)!=="novo"?"#8593a3":COLORS[l.temp], fillOpacity:.95})
       .bindPopup(`<b>${esc(l.name)}</b><br>${l.phone ? esc(fmtPhone(l.phone,cfg.cc))+"<br>" : ""}${l.whatsapp ? `<a href="${esc(waLink(l))}" target="_blank" rel="noopener">💬 Chamar no WhatsApp</a>` : "<i>sem WhatsApp</i>"}`)
       .on("click", () => select(l.id, false)).addTo(layer);
@@ -565,7 +570,7 @@ function renderMap(){
 function select(id, fly){
   selId = id; renderList(); renderMap();
   const l = leads.find(x => x.id === id);
-  if(fly && l){ map.flyTo([l.lat,l.lon], Math.max(map.getZoom(),15), {duration:.6}); setTimeout(() => markers[id]?.openPopup(), 650); }
+  if(fly && l && l.lat != null){ map.flyTo([l.lat,l.lon], Math.max(map.getZoom(),15), {duration:.6}); setTimeout(() => markers[id]?.openPopup(), 650); }
   document.querySelector(`.card[data-id="${id}"]`)?.scrollIntoView({block:"nearest", behavior:"smooth"});
 }
 
@@ -673,8 +678,8 @@ async function history(){
     const rows = [...items.values()].filter(r => !q || norm(r.niche+" "+r.city+" "+r.label).includes(q)).sort((a,b) => b.t - a.t);
     const groups = {}; rows.forEach(r => (groups[r.label] ||= []).push(r));
     const html = Object.keys(groups).sort((a,b) => a.localeCompare(b,"pt-BR")).map(g => `<div class="sg"><b>${esc(g.charAt(0).toUpperCase()+g.slice(1))}</b> <span class="addr">${groups[g].length} busca${groups[g].length>1?"s":""}</span>
-      ${groups[g].map(r => `<div class="hist" data-id="${esc(r.id)}"><span><b>${esc(r.city)}</b> · ${r.rad} km<br><span class="addr">${r.nsite} sem site (de ${r.n}) · salva em ${fmt(r.t)}${r.cloud ? " · ☁️" : ""}</span></span>
-        <span class="acts"><button class="btn" data-a="open" type="button">Abrir</button><button class="btn" data-a="upd" type="button" title="Pesquisar de novo">Atualizar</button><button class="btn" data-a="del" type="button" title="Excluir">✕</button></span></div>`).join("")}</div>`).join("");
+      ${groups[g].map(r => `<div class="hist" data-id="${esc(r.id)}"><span><b>${esc(r.city)}</b> · ${r.rad ? r.rad+" km" : "lista importada"}<br><span class="addr">${r.nsite} sem site (de ${r.n}) · salva em ${fmt(r.t)}${r.cloud ? " · ☁️" : ""}</span></span>
+        <span class="acts"><button class="btn" data-a="open" type="button">Abrir</button>${r.rad ? `<button class="btn" data-a="upd" type="button" title="Pesquisar de novo">Atualizar</button>` : ""}<button class="btn" data-a="del" type="button" title="Excluir">✕</button></span></div>`).join("")}</div>`).join("");
     const old = !q && legacy.length ? `<div class="sg"><b>Sem dados salvos</b> <span class="addr">pesquisadas antes do salvamento existir; busque de novo para guardar</span>${legacy.map((x,i) => `<div class="hist" data-l="${i}"><span><b>${esc(x.niche)}</b> · ${esc(x.city)} · ${x.rad} km</span><span class="acts"><button class="btn" type="button">Buscar de novo</button></span></div>`).join("")}</div>` : "";
     const aviso = !Cloud.on() ? `<div class="addr">Salvas só neste computador. <a href="#" id="goCloud">Conecte o banco online</a> para acessar de qualquer lugar.</div>` : cloudErr ? `<div class="addr" style="color:#ef4444">Banco online indisponível agora (${esc(cloudErr.message)}); mostrando só o que está neste computador.</div>` : "";
     box.querySelector("#sl").innerHTML = (html + old || "<div class='addr'>Nenhuma busca salva ainda. Cada busca que você fizer aparece aqui, com a lista completa.</div>") + aviso;
@@ -715,7 +720,7 @@ function fireMode(){
 
 /* ====== exportação ====== */
 function rows(){
-  return visible().map(l => ({"Nome":l.name,"Score":l.score,"Temperatura":{hot:"Quente",warm:"Morno",cold:"Frio"}[l.temp],"Etapa":stageName(stageOf(l)),"Telefone":l.phone?fmtPhone(l.phone,cfg.cc):"","WhatsApp":l.whatsapp?"+"+l.whatsapp:"","Status WhatsApp":l.waKind,"Link WhatsApp":waLink(l),"Endereço":l.addr,"Distância (km)":+l.dist.toFixed(2),"Instagram":l.insta,"Facebook":l.face,"E-mail":l.email,"Tem site":l.hasSite?"sim":"não","Anotações":S[l.id]?.notes||"","Mensagem":msgFor(l),"Google":l.google,"OSM":l.osm}));
+  return visible().map(l => ({"Nome":l.name,"Score":l.score,"Temperatura":{hot:"Quente",warm:"Morno",cold:"Frio"}[l.temp],"Etapa":stageName(stageOf(l)),"Telefone":l.phone?fmtPhone(l.phone,cfg.cc):"","WhatsApp":l.whatsapp?"+"+l.whatsapp:"","Status WhatsApp":l.waKind,"Link WhatsApp":waLink(l),"Endereço":l.addr,"Distância (km)":l.dist != null ? +l.dist.toFixed(2) : "","CNPJ":l.cnpj||"","Observações da base":l.extra||"","Instagram":l.insta,"Facebook":l.face,"E-mail":l.email,"Tem site":l.hasSite?"sim":"não","Anotações":S[l.id]?.notes||"","Mensagem":msgFor(l),"Google":l.google,"OSM":l.osm}));
 }
 const fname = ext => `leads-${norm(ctx?.cityShort||"busca").replace(/\W+/g,"-")}-${norm(ctx?.label||"").replace(/\W+/g,"-")}.${ext}`;
 $("csv").onclick = () => {
@@ -762,4 +767,149 @@ $("kanban").addEventListener("drop", e => {
   const c = e.target.closest(".col"); if(!c || !dragId) return; e.preventDefault();
   const l = findLead(dragId); if(l){ setStage(l, c.dataset.stage); renderAll(); } dragId = null;
 });
+
+/* ====== importar lista (CNPJ / CSV / Excel): sem depender de nenhuma API ====== */
+function parseCSV(text){
+  const nl = text.indexOf("\n"), first = text.slice(0, nl > 0 ? nl : text.length);
+  const delim = [";", ",", "\t"].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const rows = []; let row = [], cur = "", q = false;
+  for(let i = 0; i < text.length; i++){
+    const c = text[i];
+    if(q){ if(c === '"'){ if(text[i+1] === '"'){ cur += '"'; i++; } else q = false; } else cur += c; }
+    else if(c === '"') q = true;
+    else if(c === delim){ row.push(cur); cur = ""; }
+    else if(c === "\n" || c === "\r"){ if(c === "\r" && text[i+1] === "\n") i++; row.push(cur); cur = ""; if(row.some(x => x.trim())) rows.push(row); row = []; }
+    else cur += c;
+  }
+  row.push(cur); if(row.some(x => x.trim())) rows.push(row);
+  return rows;
+}
+async function readTable(file){
+  let rows;
+  if(/\.xlsx?$/i.test(file.name)){
+    if(typeof XLSX === "undefined") throw new Error("A biblioteca do Excel não carregou (sem internet?). Salve a planilha como CSV e tente de novo.");
+    const wb = XLSX.read(await file.arrayBuffer(), {type:"array"});
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, raw:false, defval:""});
+  }else{
+    const buf = await file.arrayBuffer(); let txt = new TextDecoder("utf-8").decode(buf);
+    if(txt.includes("�")) txt = new TextDecoder("windows-1252").decode(buf);   // CSV antigo em Latin-1
+    rows = parseCSV(txt.replace(/^﻿/, ""));
+  }
+  rows = rows.map(r => r.map(c => String(c ?? "").trim())).filter(r => r.some(Boolean));
+  const hi = rows.findIndex(r => r.filter(Boolean).length >= 3);   // cabeçalho = primeira linha com pelo menos 3 colunas
+  if(hi < 0 || rows.length < hi + 2) throw new Error("Não encontrei uma tabela com cabeçalho e linhas nesse arquivo.");
+  return {headers: rows[hi].map((h, i) => h || "Coluna " + (i+1)), data: rows.slice(hi + 1)};
+}
+const hnorm = s => norm(s).replace(/[^a-z0-9]/g, "");
+const IMP_FIELDS = [["fantasia","Nome fantasia"],["razao","Razão social / nome"],["cnpj","CNPJ"],["phone1","Telefone"],["phone2","Telefone 2 (opcional)"],["ddd","DDD (se estiver separado)"],["email","E-mail"],["city","Cidade"],["uf","UF"],["street","Rua"],["number","Número"],["district","Bairro"],["cnae","Atividade (CNAE)"],["opened","Data de abertura"],["site","Site (se houver)"],["status","Situação cadastral"]];
+function detectCols(headers){
+  const H = headers.map(hnorm), used = new Set(), out = {};
+  const pick = (key, ...res) => { for(const re of res){ const i = H.findIndex((h, j) => !used.has(j) && re.test(h)); if(i >= 0){ used.add(i); out[key] = i; return; } } };
+  pick("fantasia", /nomefantasia|^fantasia/); pick("razao", /razaosocial|^razao|nomeempresarial|^empresa$|^nome$/);
+  pick("cnpj", /^cnpj$/, /^cnpj(?!basico)/, /cnpj/);
+  const phones = H.map((h, i) => /(tel|fone|celular|whats)/.test(h) && !/ddd/.test(h) ? i : -1).filter(i => i >= 0 && !used.has(i));
+  if(phones[0] != null){ out.phone1 = phones[0]; used.add(phones[0]); } if(phones[1] != null){ out.phone2 = phones[1]; used.add(phones[1]); }
+  pick("ddd", /^ddd/);
+  pick("email", /mail|correioeletronico/); pick("city", /^(municipio|cidade)/); pick("uf", /^(uf|estado|sigla)$/); pick("street", /^(logradouro|endereco|rua)$/);
+  pick("number", /^(numero|num|nro)$/); pick("district", /bairro/); pick("cnae", /cnae.*(descr|principal)|atividadeprincipal|cnaefiscalprincipal|^cnae/);
+  pick("opened", /dataabertura|inicioatividade|datainicio|datadeinicio|abertura/); pick("site", /^(site|website|url|paginaweb)$/); pick("status", /situacao/);
+  return out;
+}
+const MAIL_COMUNS = /@(gmail|hotmail|outlook|yahoo|icloud|live|msn|uol|bol|terra|ig|globo|protonmail)\./i;
+const titleCase = s => /[a-zà-ú]/.test(s) ? s : s.toLowerCase().replace(/(^|[\s\-\/(])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/ (Da|De|Do|Das|Dos|E) /g, w => w.toLowerCase()).replace(/\b(Ii|Iii|Iv|Vi|Vii|Viii|Ix|Xi|Xii|Xiii|Xiv|Xv|Xvi|Xvii|Xviii|Xix|Xx|Xxi)\b/g, w => w.toUpperCase());
+function parseDate(v){
+  v = String(v || "").trim(); let m;
+  if((m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/))) return new Date(+m[3], +m[2]-1, +m[1]);
+  if((m = v.match(/^(\d{4})-(\d{2})-(\d{2})/))) return new Date(+m[1], +m[2]-1, +m[3]);
+  if((m = v.match(/^(\d{4})(\d{2})(\d{2})$/))) return new Date(+m[1], +m[2]-1, +m[3]);
+  return null;
+}
+const fmtCnpj = d => d.length === 14 ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5") : d;
+function importLeads(tbl, map, o){
+  const get = (r, k) => map[k] != null && map[k] !== "" ? String(r[+map[k]] ?? "").trim() : "";
+  const seen = new Set(), out = [], now = Date.now(), cities = {};
+  for(const r of tbl.data){
+    const status = get(r, "status"); if(o.activeOnly && status && !/ativ|^02$|^2$/i.test(status)) continue;
+    const city = get(r, "city"), uf = get(r, "uf");
+    if(o.cityFilter && !norm(city + " " + uf).includes(norm(o.cityFilter))) continue;
+    const dt = parseDate(get(r, "opened")), days = dt ? Math.floor((now - dt.getTime()) / 864e5) : null;
+    if(o.maxDays && (days == null || days > o.maxDays || days < 0)) continue;
+    const nm = get(r, "fantasia") || get(r, "razao"); if(!nm) continue;
+    const cnpj = get(r, "cnpj").replace(/\D/g, ""), cc = cfg.cc || "55", ddd = get(r, "ddd");
+    const phones = ["phone1","phone2"].map(k => { let d = get(r, k).replace(/[^\d;,\/ ]/g, " ").split(/[;,\/]/)[0].replace(/\D/g, ""); if(d && d.length <= 9 && ddd) d = ddd.replace(/\D/g, "") + d; return d ? normPhone(d, cc) : null; }).filter(Boolean);
+    const mob = phones.find(isBRMobile), phone = phones[0] || null, whatsapp = mob || null, waKind = mob ? "provável (celular)" : "";
+    const email = get(r, "email").toLowerCase(), site = get(r, "site"), hasSite = !!site && !/^(n\/?a|-|não|nao)$/i.test(site);
+    const ownDomain = email.includes("@") && !MAIL_COMUNS.test(email);
+    const addr = [titleCase([get(r, "street"), get(r, "number")].filter(Boolean).join(", ")), titleCase(get(r, "district")), [titleCase(city), uf.toUpperCase()].filter(Boolean).join("/")].filter(Boolean).join(" · ");
+    let score = 20; if(phone) score += 25; if(whatsapp) score += 15; if(email) score += 5; if(addr) score += 5;
+    if(days != null && days >= 0) score += days <= 45 ? 25 : days <= 90 ? 20 : days <= 180 ? 10 : days <= 365 ? 5 : 0;
+    if(ownDomain) score -= 10; if(hasSite) score -= 40;
+    score = Math.max(0, Math.min(100, score));
+    const extra = [dt ? "Aberta em " + dt.toLocaleDateString("pt-BR") + (days >= 0 ? " (há " + (days < 60 ? days + " dias" : Math.round(days/30) + " meses") + ")" : "") : "", cnpj ? "CNPJ " + fmtCnpj(cnpj) : "", get(r, "cnae"), ownDomain ? "e-mail com domínio próprio: confira se já tem site" : ""].filter(Boolean).join(" · ");
+    const name = titleCase(nm), id = "c" + (cnpj || hnorm(nm + (phone || addr)));
+    if(seen.has(id)) continue; seen.add(id);
+    const cname = titleCase(city); if(cname) cities[cname] = (cities[cname] || 0) + 1;
+    out.push({id, name, lat:null, lon:null, dist:null, addr, street:"", hn:true, phone, whatsapp, waKind, insta:"", face:"", email, hours:"", hasSite, site: hasSite ? site : "", score,
+      temp: score >= 70 ? "hot" : score >= 45 ? "warm" : "cold", city:cname || o.city || "sua cidade", nicho:o.label, tplKey:o.tpl, extra, cnpj, src:"import", osm:"", google:"https://www.google.com/search?q=" + encodeURIComponent(`"${name}" ${cname || o.city || ""}`)});
+  }
+  const top = Object.entries(cities).sort((a, b) => b[1] - a[1])[0];
+  return {leads: out, city: top ? top[0] : (o.city || "")};
+}
+const TPL_OPTS = [["","Mensagem padrão (genérica)"],["clinica","Clínica / saúde"],["comida","Restaurante / bar / padaria"],["beleza","Salão / beleza"],["academia","Academia"],["pilates","Pilates"],["personal","Personal trainer"],["pet","Pet / veterinária"],["auto","Oficina / autopeças"],["profissional","Advogado / contador / escritório"],["imoveis","Imobiliária"],["loja","Loja"],["hospedagem","Hotel / pousada"],["ensino","Escola / curso"],["servicos","Serviços (eletricista etc.)"],["solar","Energia solar"],["marcenaria","Marcenaria / planejados"],["tatuagem","Estúdio de tatuagem"]];
+function importDialog(){
+  const m = modal(""), box = m.firstChild; box.style.width = "min(720px,100%)";
+  let tbl = null;
+  const step1 = (msg) => {
+    box.innerHTML = `<h3>📥 Importar lista de empresas</h3>
+      <div class="addr">Use uma planilha (CSV ou Excel) exportada de uma base de CNPJ, como o Casa dos Dados, ou de qualquer outra lista. O app reconhece as colunas sozinho e você confere antes de importar. A lista ganha nota quente/morno/frio, mensagem de WhatsApp e entra no Kanban como as buscas do mapa. Empresas abertas há pouco tempo ganham mais pontos.</div>
+      ${msg ? `<div class="addr" style="color:#ef4444">${esc(msg)}</div>` : ""}
+      <label>Arquivo<input id="iFile" type="file" accept=".csv,.txt,.xlsx,.xls"></label>
+      <div class="acts"><button class="btn" id="iX" type="button">Fechar</button></div>`;
+    box.querySelector("#iX").onclick = () => m.remove();
+    box.querySelector("#iFile").onchange = async e => {
+      const f = e.target.files[0]; if(!f) return;
+      try{ tbl = await readTable(f); step2(f.name); }catch(err){ step1(err.message || String(err)); }
+    };
+  };
+  const step2 = (fname0) => {
+    const det = detectCols(tbl.headers), opts = sel => `<option value="">—</option>` + tbl.headers.map((h, i) => `<option value="${i}" ${sel === i ? "selected" : ""}>${esc(h)}</option>`).join("");
+    const label0 = (fname0 || "").replace(/\.[^.]+$/, "").replace(/[_\-]+/g, " ").trim();
+    box.innerHTML = `<h3>📥 Conferir colunas</h3>
+      <div class="addr">${tbl.data.length} linhas encontradas. Ajuste o que estiver errado.</div>
+      <div class="two">${IMP_FIELDS.map(([k, n]) => `<label>${n}<select data-k="${k}">${opts(det[k])}</select></label>`).join("")}</div>
+      <div class="two"><label>Nome do nicho<input id="iLabel" value="${esc(label0)}" placeholder="ex.: advogados novos"></label>
+        <label>Modelo de mensagem<select id="iTpl">${TPL_OPTS.map(([v, n]) => `<option value="${v}">${n}</option>`).join("")}</select></label></div>
+      <div class="two"><label>Só desta cidade (opcional)<input id="iCity" placeholder="ex.: Sorocaba"></label>
+        <label>Abertas há no máximo<select id="iDays"><option value="0">qualquer data</option><option value="30">30 dias</option><option value="90">90 dias</option><option value="180">6 meses</option><option value="365">1 ano</option></select></label></div>
+      <label style="grid-template-columns:auto 1fr;align-items:center;gap:8px"><input id="iAct" type="checkbox" ${det.status != null ? "checked" : ""}> Só empresas ativas (se houver coluna de situação)</label>
+      <div class="addr" id="iPrev"></div>
+      <div class="acts"><button class="pri btn" id="iGo" type="button">Importar</button><button class="btn" id="iBack" type="button">Voltar</button></div>`;
+    const read = () => { const mp = {}; box.querySelectorAll("select[data-k]").forEach(s => mp[s.dataset.k] = s.value); return mp; };
+    const opt = () => ({label: box.querySelector("#iLabel").value.trim() || "importada", tpl: box.querySelector("#iTpl").value, cityFilter: box.querySelector("#iCity").value.trim(), maxDays: +box.querySelector("#iDays").value, activeOnly: box.querySelector("#iAct").checked, city: ""});
+    const prev = () => {
+      const mp = read(), r = importLeads(tbl, mp, opt());
+      const c = {hot: 0, warm: 0, cold: 0}; r.leads.forEach(l => c[l.temp]++);
+      box.querySelector("#iPrev").innerHTML = (mp.fantasia || mp.razao) ? `<b>${r.leads.length}</b> empresas para importar (🔥 ${c.hot} · 🌤️ ${c.warm} · ❄️ ${c.cold}), <b>${r.leads.filter(l => l.phone).length}</b> com telefone, <b>${r.leads.filter(l => l.whatsapp).length}</b> com celular.${r.leads[0] ? "<br>Exemplo: " + esc(r.leads[0].name) + (r.leads[0].phone ? " · " + esc(fmtPhone(r.leads[0].phone, cfg.cc)) : "") : ""}` : `<span style="color:#ef4444">Escolha a coluna do nome (fantasia ou razão social).</span>`;
+      return r;
+    };
+    box.querySelectorAll("select,input").forEach(el => el.onchange = el.oninput = prev);
+    box.querySelector("#iTpl").value = (resolveNiche(label0).m) || ""; prev();
+    box.querySelector("#iBack").onclick = () => step1();
+    box.querySelector("#iGo").onclick = async () => {
+      const mp = read(); if(!mp.fantasia && !mp.razao) return prev();
+      const o = opt(), r = importLeads(tbl, mp, o);
+      if(!r.leads.length){ box.querySelector("#iPrev").innerHTML = `<span style="color:#ef4444">Nenhuma empresa passou nos filtros. Afrouxe a cidade, a data ou o filtro de ativas.</span>`; return; }
+      numTok++;
+      leads = r.leads; selId = null; if(circle){ circle.remove(); circle = null; }
+      ctx = {lat:null, lon:null, rad:0, label:o.label.toLowerCase(), m:o.tpl, cityShort:r.city, import:true};
+      const stamp = new Date().toISOString().slice(0, 10);
+      curSearch = {id:"imp|" + norm(o.label) + "|" + norm(r.city) + "|" + stamp, niche:"Importação: " + o.label, city:r.city || "várias cidades", rad:0}; savePartial = false;
+      m.remove(); renderAll(); await saveSearch();
+      toast(r.leads.length + " empresas importadas e salvas em Buscas salvas. Elas não aparecem no mapa (a lista não traz coordenadas); use a lista ao lado.");
+    };
+  };
+  step1();
+}
+
+$("imp").onclick = importDialog;
 Cloud.set(Cloud.on() ? "busy" : "off"); if(Cloud.on()) syncState();
