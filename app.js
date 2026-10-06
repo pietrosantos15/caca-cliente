@@ -300,8 +300,11 @@ function hedged(fns, stagger){
   });
 }
 async function overpassOnce(q, ctl){
+  let downErr = null;   // o proxy já viu todos os espelhos caírem há poucos minutos
   const tryEp = ep => async () => {
-    const r = await fetchT(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}}, 15000, ctl.signal);
+    // servidores "fora" segundo o proxy: tenta só um caminho direto, rápido, em vez de 3 × 15 s
+    if(downErr && ep !== BROWSER_EPS[0]) throw downErr;
+    const r = await fetchT(ep, {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}}, downErr ? 8000 : 15000, ctl.signal);
     if(!r.ok) throw new Error(new URL(ep).host+" respondeu "+r.status);
     const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do Overpass");
     // 200 + lista vazia + "remark" = servidor estourou tempo/memória (falha, não "sem resultados")
@@ -311,12 +314,14 @@ async function overpassOnce(q, ctl){
   // proxy do próprio site (IP da Vercel) e navegador do usuário (IP dele) são "filas" diferentes nos servidores públicos
   const viaProxy = async () => {
     const r = await fetchT("/api/overpass", {method:"POST", body:q, headers:{"Content-Type":"text/plain"}}, 30000, ctl.signal);
-    if(!r.ok){ const e = await r.json().catch(() => ({})); throw new Error(e.error || "Proxy respondeu "+r.status); }
-    const j = await r.json(); if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do proxy");
-    return j;
+    const j = await r.json().catch(() => null);
+    if(!r.ok){ const e = new Error((j && j.error) || "Proxy respondeu "+r.status); if(j && j.down) downErr = e; throw e; }
+    if(!j || !Array.isArray(j.elements)) throw new Error("Resposta inválida do proxy");
+    return j;   // pode vir com j.stale = true (resultado salvo no banco porque os servidores caíram)
   };
   const web = location.protocol.startsWith("http") && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
-  return hedged(web ? [viaProxy, ...BROWSER_EPS.map(tryEp)] : OVERPASS_EPS.map(tryEp), 2500);
+  try{ return await hedged(web ? [viaProxy, ...BROWSER_EPS.map(tryEp)] : OVERPASS_EPS.map(tryEp), 2500); }
+  catch(e){ throw downErr || e; }
 }
 let ovStale = false;   // true quando a lista veio do cache salvo no navegador (servidores fora do ar)
 const qKey = q => { let h = 5381; for(let i = 0; i < q.length; i++) h = ((h*33) ^ q.charCodeAt(i)) >>> 0; return "gc_ov_"+h.toString(36); };
@@ -327,6 +332,7 @@ async function overpass(q){
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 32000);
   try{
     const j = await overpassOnce(q, ctl);
+    if(j.stale){ ovStale = true; return j; }   // veio do banco porque os servidores caíram: não grava como "novo"
     if(j.elements.length){
       if(qCache.size >= 20) qCache.delete(qCache.keys().next().value); qCache.set(q, {t:Date.now(), j});
       try{   // guarda também no navegador (até 6 buscas) para não ficar na mão se os servidores caírem
@@ -452,16 +458,16 @@ async function search(niche, city, rad){
     map.setView([g.lat,g.lon], rad > 15 ? 10 : rad > 8 ? 11 : rad > 3 ? 12 : 13);
     if(circle) circle.remove(); circle = L.circle([g.lat,g.lon], {radius:rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
     toast("Buscando em "+(g.name||city)+"… pode levar alguns segundos");
+    // Geoapify (servidor estável, mesmos dados do OSM) parte junto com o Overpass: se o Overpass cair, a lista já está pronta
+    const geoP = geoapifyPlaces(nq, g, rad);
     let elements = [], ovErr = null;
     try{ elements = (await overpass(buildQuery(nq, g.lat, g.lon, rad))).elements || []; }
     catch(e){ ovErr = e; }
-    // Overpass falhou ou trouxe poucos resultados? tenta o Geoapify e, se ainda faltar, o Nominatim
     let usedGeo = false;
-    if(ovErr || elements.length < 10){
-      toast(ovErr ? "Servidor principal ocupado, usando outra fonte…" : "Poucos resultados, buscando em outra fonte…");
-      const have = new Set(elements.map(e => e.type+e.id)), geo = (await geoapifyPlaces(nq, g, rad)).filter(e => !have.has(e.type+e.id));
-      if(geo.length){ usedGeo = true; elements = elements.concat(geo); }
-    }
+    if(ovErr || elements.length < 10) toast(ovErr ? "Servidor principal ocupado, usando outra fonte…" : "Poucos resultados, buscando em outra fonte…");
+    const have = new Set(elements.map(e => e.type+e.id)), geo = (await geoP).filter(e => !have.has(e.type+e.id));
+    if(geo.length){ usedGeo = ovErr || elements.length < 10; elements = elements.concat(geo); }
+    // ainda faltou? tenta o Nominatim (outro serviço do OSM, independente do Overpass)
     if(ovErr || elements.length < 10){
       try{
         const extra = await nominatimPlaces(nq, g.lat, g.lon, rad), ids = new Set(elements.map(e => e.type+e.id));
