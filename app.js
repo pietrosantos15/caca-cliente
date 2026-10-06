@@ -227,7 +227,13 @@ function cloudDialog(){
     if(box.querySelector("#cOn")) box.querySelector("#cOn").onclick = async () => {
       const k = box.querySelector("#cKey").value; if(!k) return;
       Cloud.key = k;
-      try{ Cloud.set("busy"); await Cloud.call("ping"); store.set("gc_key", k); Cloud.set("ok"); m.remove(); toast("Conectado ao banco online."); await syncState(); await cloudUploadLocal(); }
+      try{
+        Cloud.set("busy"); const pg = await Cloud.call("ping");
+        if(store.get("gc_uid", pg.user) !== pg.user){   // outra pessoa neste computador: não mistura os dados dela com os da anterior
+          try{ const all = await DB.all(); for(const r of all) await DB.del(r.id); }catch{}
+          ["gc_state","gc_hist","gc_rev"].forEach(k2 => localStorage.removeItem(k2)); S = {}; leads = []; renderAll();
+        }
+        store.set("gc_uid", pg.user); store.set("gc_key", k); Cloud.set("ok"); m.remove(); toast("Conectado ao banco online."); await syncState(); await cloudUploadLocal(); }
       catch(e){ Cloud.key = ""; Cloud.set("off"); draw(e.status === 501 ? e.message + "\n\nNa Vercel: Storage > Create > Upstash Redis (conectar ao projeto) e Settings > Environment Variables > GARIMPO_SENHA. Depois faça Redeploy." : e.message); }
     };
   };
