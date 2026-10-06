@@ -132,8 +132,8 @@ function buildQuery(nq, lat, lon, rad){
   else parts = [`nwr["name"~"${nq.name.replace(/[^a-z0-9 ]/g,"")}",i]${around};`];
   return `[out:json][timeout:25][maxsize:67108864];(${parts.join("")});out center tags qt;`;
 }
-const OVERPASS_EPS = ["https://overpass-api.de/api/interpreter","https://lz4.overpass-api.de/api/interpreter","https://overpass.openstreetmap.fr/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter"];
-const BROWSER_EPS = OVERPASS_EPS.slice(0, 2);   // os que aceitam chamada direta do navegador (CORS) mesmo em *.vercel.app
+const OVERPASS_EPS = ["https://overpass-api.de/api/interpreter","https://lz4.overpass-api.de/api/interpreter","https://overpass.openstreetmap.fr/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter","https://z.overpass-api.de/api/interpreter","https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
+const BROWSER_EPS = [OVERPASS_EPS[0], OVERPASS_EPS[1], OVERPASS_EPS[5]];   // os que aceitam chamada direta do navegador (CORS) mesmo em *.vercel.app
 const qCache = new Map();   // consulta -> {t, j}: repetir a mesma busca não consulta os servidores de novo
 // fetch com limite de tempo próprio: servidor travado não segura a busca inteira
 function fetchT(url, o, ms, outer){
@@ -183,14 +183,28 @@ async function overpassOnce(q, ctl){
   const web = location.protocol.startsWith("http") && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   return hedged(web ? [viaProxy, ...BROWSER_EPS.map(tryEp)] : OVERPASS_EPS.map(tryEp), 2500);
 }
+let ovStale = false;   // true quando a lista veio do cache salvo no navegador (servidores fora do ar)
+const qKey = q => { let h = 5381; for(let i = 0; i < q.length; i++) h = ((h*33) ^ q.charCodeAt(i)) >>> 0; return "gc_ov_"+h.toString(36); };
 async function overpass(q){
+  ovStale = false;
   const hit = qCache.get(q);
   if(hit && Date.now() - hit.t < 15*60*1000) return hit.j;
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 32000);
   try{
     const j = await overpassOnce(q, ctl);
-    if(j.elements.length){ if(qCache.size >= 20) qCache.delete(qCache.keys().next().value); qCache.set(q, {t:Date.now(), j}); }
+    if(j.elements.length){
+      if(qCache.size >= 20) qCache.delete(qCache.keys().next().value); qCache.set(q, {t:Date.now(), j});
+      try{   // guarda também no navegador (até 6 buscas) para não ficar na mão se os servidores caírem
+        const idx = store.get("gc_ov_idx", []).filter(k => k !== qKey(q)); idx.unshift(qKey(q));
+        idx.splice(6).forEach(k => localStorage.removeItem(k));
+        store.set(qKey(q), {t:Date.now(), j}); store.set("gc_ov_idx", idx);
+      }catch(e){ /* sem espaço: ignora */ }
+    }
     return j;
+  }catch(e){
+    const old = store.get(qKey(q), null);   // servidores fora: usa o resultado salvo desta mesma busca
+    if(old && old.j && old.j.elements.length){ ovStale = true; return old.j; }
+    throw e;
   }finally{ clearTimeout(timer); ctl.abort(); }   // cancela os caminhos que sobraram
 }
 // Fonte reserva/complementar: busca por nome no Nominatim (outro serviço do OSM, não depende do Overpass).
@@ -314,7 +328,7 @@ async function search(niche, city, rad){
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
     h.unshift({niche, city, rad}); store.set("gc_hist", h.slice(0,10));
-    toast(ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
+    toast(ovStale ? "Servidores do OpenStreetMap fora do ar: mostrando o resultado salvo desta busca (pode estar desatualizado)." : ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
     renderAll();
     fillNumbers();
   }catch(e){ toast(e.message || String(e), true); }

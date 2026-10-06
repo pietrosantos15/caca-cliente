@@ -5,6 +5,8 @@ const EPS = [
   "https://overpass.openstreetmap.fr/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
+  "https://z.overpass-api.de/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ];
 const UA = "garimpo-local/1.0 (+https://github.com/pietrosantos15)";
 const EP_TIMEOUT_MS = 15000;  // tempo máximo por servidor
