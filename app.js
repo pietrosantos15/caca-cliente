@@ -118,6 +118,43 @@ const COLORS = {hot:"#ef6a3c", warm:"#f0a020", cold:"#8593a3"};
 
 function toast(t, err){ const m = $("msgbar"); m.textContent = t; m.className = err ? "err" : ""; m.hidden = !t; }
 
+
+/* ====== buscas salvas (IndexedDB): guarda a lista inteira de cada busca para reabrir depois, sem consultar de novo ====== */
+const DB = {
+  db: null,
+  open(){ return this.db || (this.db = new Promise((ok, no) => {
+    try{
+      const r = indexedDB.open("garimpo", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("buscas", {keyPath:"id"});
+      r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+    }catch(e){ no(e); }
+  })); },
+  async run(mode, fn){ const db = await this.open(); return new Promise((ok, no) => { const t = db.transaction("buscas", mode), st = t.objectStore("buscas"), rq = fn(st); t.oncomplete = () => ok(rq && rq.result); t.onerror = t.onabort = () => no(t.error); }); },
+  all(){ return this.run("readonly", st => st.getAll()).then(a => a || []); },
+  get(id){ return this.run("readonly", st => st.get(id)); },
+  put(rec){ return this.run("readwrite", st => st.put(rec)); },
+  del(id){ return this.run("readwrite", st => st.delete(id)); },
+};
+const searchId = (niche, city, rad) => norm(niche)+"|"+norm(city)+"|"+rad;
+let curSearch = null, savePartial = false;   // busca em exibição (para salvar de novo quando os números de rua chegarem)
+async function saveSearch(){
+  if(!curSearch || !leads.length) return;
+  try{
+    const old = await DB.get(curSearch.id);
+    if(savePartial && old && old.leads.length > leads.length) return;   // lista parcial não substitui uma completa
+    await DB.put({...curSearch, ctx, leads, t:Date.now()});
+  }catch(e){ if(!saveSearch.warned){ saveSearch.warned = 1; toast("Não foi possível guardar esta busca neste navegador (armazenamento bloqueado ou cheio).", true); } }
+}
+function openSaved(rec){
+  numTok++;
+  $("niche").value = rec.niche; $("city").value = rec.city; $("radius").value = rec.rad; $("rv").textContent = rec.rad;
+  ctx = rec.ctx; leads = rec.leads; selId = null; curSearch = {id:rec.id, niche:rec.niche, city:rec.city, rad:rec.rad}; savePartial = false;
+  map.setView([ctx.lat, ctx.lon], rec.rad > 15 ? 10 : rec.rad > 8 ? 11 : rec.rad > 3 ? 12 : 13);
+  if(circle) circle.remove(); circle = L.circle([ctx.lat, ctx.lon], {radius:rec.rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
+  toast("Busca salva em "+new Date(rec.t).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"})+" — mesmos dados de quando você pesquisou. Use “Atualizar” em Buscas salvas para pesquisar de novo.");
+  renderAll(); fillNumbers().then(saveSearch);
+}
+
 /* ====== busca ====== */
 async function geocode(q){
   const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=pt-BR" + (cfg.cc === "55" ? "&countrycodes=br" : "") + "&q=" + encodeURIComponent(q));
@@ -329,8 +366,10 @@ async function search(niche, city, rad){
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
     h.unshift({niche, city, rad}); store.set("gc_hist", h.slice(0,10));
     toast(ovStale ? "Servidores do OpenStreetMap fora do ar: mostrando o resultado salvo desta busca (pode estar desatualizado)." : ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
+    curSearch = {id:searchId(niche, city, rad), niche, city, rad}; savePartial = !!(ovErr || ovStale);
     renderAll();
-    fillNumbers();
+    saveSearch();
+    fillNumbers().then(saveSearch);
   }catch(e){ toast(e.message || String(e), true); }
   finally{ btn.disabled = false; }
 }
@@ -494,12 +533,31 @@ function editMsg(){
   m.querySelector("#cReset").onclick = () => { m.querySelector("#cTpl").value = DEFAULT_TPL; };
   m.querySelector("#cSave").onclick = () => { cfg = {me:m.querySelector("#cMe").value.trim(), cc:m.querySelector("#cCc").value.trim()||"55", tpl:m.querySelector("#cTpl").value}; saveCfg(); m.remove(); renderAll(); };
 }
-function history(){
-  const h = store.get("gc_hist", []);
-  const m = modal(`<h3>Buscas anteriores</h3>${h.map((x,i) => `<div class="hist" data-i="${i}"><span><b>${esc(x.niche)}</b> · ${esc(x.city)}</span><span>${x.rad} km</span></div>`).join("") || "<div class='addr'>Nenhuma busca ainda.</div>"}
-    <button class="btn" id="hClose" type="button">Fechar</button>`);
-  m.querySelector("#hClose").onclick = () => m.remove();
-  m.querySelectorAll(".hist").forEach(el => el.onclick = () => { const x = h[+el.dataset.i]; $("niche").value = x.niche; $("city").value = x.city; $("radius").value = x.rad; $("rv").textContent = x.rad; m.remove(); search(x.niche, x.city, x.rad); });
+async function history(){
+  let recs = []; try{ recs = await DB.all(); }catch(e){ /* sem IndexedDB */ }
+  const have = new Set(recs.map(r => r.id));
+  const legacy = store.get("gc_hist", []).filter(x => !have.has(searchId(x.niche, x.city, x.rad)));   // buscas antigas, de antes de existir o salvamento
+  const m = modal(""); const box = m.firstChild; box.style.width = "min(680px,100%)";
+  const fmt = t => new Date(t).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"});
+  const draw = () => {
+    const q = norm(box.querySelector("#sq")?.value || "");
+    const rows = recs.filter(r => !q || norm(r.niche+" "+r.city+" "+(r.ctx?.label||"")).includes(q)).sort((a,b) => b.t - a.t);
+    const groups = {}; rows.forEach(r => (groups[r.ctx?.label || r.niche] ||= []).push(r));
+    const html = Object.keys(groups).sort((a,b) => a.localeCompare(b,"pt-BR")).map(g => `<div class="sg"><b>${esc(g.charAt(0).toUpperCase()+g.slice(1))}</b> <span class="addr">${groups[g].length} busca${groups[g].length>1?"s":""}</span>
+      ${groups[g].map(r => { const n = r.leads.filter(l => !l.hasSite).length; return `<div class="hist" data-id="${esc(r.id)}"><span><b>${esc(r.city)}</b> · ${r.rad} km<br><span class="addr">${n} sem site (de ${r.leads.length}) · salva em ${fmt(r.t)}</span></span>
+        <span class="acts"><button class="btn" data-a="open" type="button">Abrir</button><button class="btn" data-a="upd" type="button" title="Pesquisar de novo">Atualizar</button><button class="btn" data-a="del" type="button" title="Excluir">✕</button></span></div>`; }).join("")}</div>`).join("");
+    const old = !q && legacy.length ? `<div class="sg"><b>Sem dados salvos</b> <span class="addr">pesquisadas antes do salvamento existir; busque de novo para guardar</span>${legacy.map((x,i) => `<div class="hist" data-l="${i}"><span><b>${esc(x.niche)}</b> · ${esc(x.city)} · ${x.rad} km</span><span class="acts"><button class="btn" type="button">Buscar de novo</button></span></div>`).join("")}</div>` : "";
+    box.querySelector("#sl").innerHTML = html + old || "<div class='addr'>Nenhuma busca salva ainda. Cada busca que você fizer aparece aqui, com a lista completa.</div>";
+    box.querySelectorAll(".hist[data-id]").forEach(el => el.onclick = async e => {
+      const r = recs.find(x => x.id === el.dataset.id), a = e.target.dataset?.a || "open"; if(!r) return;
+      if(a === "del"){ e.stopPropagation(); if(!confirm("Excluir esta busca salva ("+r.niche+" em "+r.city+")?")) return; try{ await DB.del(r.id); }catch{} recs = recs.filter(x => x.id !== r.id); draw(); return; }
+      m.remove();
+      if(a === "upd") search(r.niche, r.city, r.rad); else openSaved(r);
+    });
+    box.querySelectorAll(".hist[data-l]").forEach(el => el.onclick = () => { const x = legacy[+el.dataset.l]; $("niche").value = x.niche; $("city").value = x.city; $("radius").value = x.rad; $("rv").textContent = x.rad; m.remove(); search(x.niche, x.city, x.rad); });
+  };
+  box.innerHTML = `<h3>📁 Buscas salvas</h3><input id="sq" placeholder="Filtrar por nicho ou cidade…" autocomplete="off"><div id="sl"></div><button class="btn" id="hClose" type="button">Fechar</button>`;
+  box.querySelector("#hClose").onclick = () => m.remove(); box.querySelector("#sq").oninput = draw; draw();
 }
 function fireMode(){
   const queue = visible().filter(l => l.whatsapp && stageOf(l) === "novo"); let i = 0;
