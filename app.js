@@ -376,7 +376,7 @@ function build(el){
   score = Math.max(0, Math.min(100, score));
   const l = {id: el.type[0]+el.id, name:t.name, lat, lon, dist, addr, street:t["addr:street"]||"", hn:!!t["addr:housenumber"], phone, whatsapp, waKind, insta, face, email, hours:t.opening_hours||"", hasSite, site:t.website||t["contact:website"]||t.url||"",
     score, temp: score >= 70 ? "hot" : score >= 45 ? "warm" : "cold", city:ctx.cityShort, nicho:ctx.label, tplKey:ctx.m,
-    osm:`https://www.openstreetmap.org/${el.type}/${el.id}`, google:"https://www.google.com/search?q="+encodeURIComponent(`"${t.name}" ${ctx.cityShort}`)};
+    osm: el.type === "ext" ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=19/${lat}/${lon}` : `https://www.openstreetmap.org/${el.type}/${el.id}`, google:"https://www.google.com/search?q="+encodeURIComponent(`"${t.name}" ${ctx.cityShort}`)};
   return applyManual(l);
 }
 // descarta WhatsApp com DDD diferente do predominante na região (evita número de outra cidade/homônimo)
@@ -387,6 +387,16 @@ function checkDDD(arr){
   if(!top || top[1] < 3) return;
   arr.forEach(l => { const d = dd(l);
     if(d && d !== top[0] && l.waKind !== "informado por você"){ l.dddWarn = d; l.whatsapp = null; l.waKind = ""; } });
+}
+
+/* ====== fonte alternativa ao Overpass: Geoapify (via /api/geoapify, precisa de GEOAPIFY_KEY na Vercel) ====== */
+async function geoapifyPlaces(nq, g, rad){
+  if(!location.protocol.startsWith("http") || !nq.f) return [];
+  try{
+    const r = await fetchT("/api/geoapify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({f:nq.f, lat:g.lat, lon:g.lon, radius:Math.round(rad*1000)})}, 25000);
+    if(!r.ok) return [];
+    return (await r.json()).elements || [];
+  }catch{ return []; }
 }
 /* ====== fonte complementar: Google Places (via /api/places, opcional) ====== */
 async function fetchPlaces(nq, g, rad){
@@ -432,13 +442,18 @@ async function search(niche, city, rad){
     let elements = [], ovErr = null;
     try{ elements = (await overpass(buildQuery(nq, g.lat, g.lon, rad))).elements || []; }
     catch(e){ ovErr = e; }
-    // Overpass falhou ou trouxe poucos resultados? usa/complementa com o Nominatim
+    // Overpass falhou ou trouxe poucos resultados? tenta o Geoapify e, se ainda faltar, o Nominatim
+    let usedGeo = false;
     if(ovErr || elements.length < 10){
-      toast(ovErr ? "Servidor principal ocupado, usando a fonte reserva…" : "Poucos resultados, buscando também pelo nome…");
+      toast(ovErr ? "Servidor principal ocupado, usando outra fonte…" : "Poucos resultados, buscando em outra fonte…");
+      const have = new Set(elements.map(e => e.type+e.id)), geo = (await geoapifyPlaces(nq, g, rad)).filter(e => !have.has(e.type+e.id));
+      if(geo.length){ usedGeo = true; elements = elements.concat(geo); }
+    }
+    if(ovErr || elements.length < 10){
       try{
         const extra = await nominatimPlaces(nq, g.lat, g.lon, rad), ids = new Set(elements.map(e => e.type+e.id));
         elements = elements.concat(extra.filter(e => !ids.has(e.type+e.id)));
-      }catch(e){ /* sem a fonte reserva, segue só com o que o Overpass trouxe */ }
+      }catch(e){ /* sem a fonte reserva, segue só com o que já veio */ }
     }
     const seen = new Set();
     leads = elements.map(build).filter(Boolean).filter(l => l.dist <= rad).filter(l => !seen.has(l.id) && seen.add(l.id));
@@ -450,7 +465,7 @@ async function search(niche, city, rad){
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
     h.unshift({niche, city, rad}); store.set("gc_hist", h.slice(0,10));
-    toast(ovStale ? "Servidores do OpenStreetMap fora do ar: mostrando o resultado salvo desta busca (pode estar desatualizado)." : ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
+    toast(usedGeo && ovErr ? "Servidor principal ocupado: lista vinda do Geoapify (pode ser parcial; busque de novo mais tarde para completar)." : ovStale ? "Servidores do OpenStreetMap fora do ar: mostrando o resultado salvo desta busca (pode estar desatualizado)." : ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
     curSearch = {id:searchId(niche, city, rad), niche, city, rad}; savePartial = !!(ovErr || ovStale);
     renderAll();
     saveSearch();
