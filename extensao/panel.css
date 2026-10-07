@@ -38,3 +38,6 @@ pre{white-space:pre-wrap;font-size:11px;background:var(--bg);padding:8px;border-
 .lead select{width:auto;margin:0;padding:4px 6px;font-size:12px}
 .lead textarea{margin-top:6px;font-size:12px}
 .empty{text-align:center;color:var(--mut);padding:24px 8px}
+
+.acts a.ig{background:#e1306c;border-color:#e1306c;color:#fff}
+.lead input[data-a=insta]{font-size:12px;padding:5px 7px;margin-top:6px}

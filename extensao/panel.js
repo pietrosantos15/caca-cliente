@@ -33,6 +33,7 @@
     if (!list.length) { $("list").innerHTML = `<div class="empty">${all.length ? "Nenhum lead com esses filtros." : "Nenhum lead ainda. Abra uma pesquisa no Google Maps e clique em “Coletar”."}</div>`; return; }
     $("list").innerHTML = list.slice(0, 300).map(l => {
       const text = GL.message(l, cfg, NICHE_TPL, DEFAULT_TPL), wa = GL.waLink(l, text);
+      const igUrl = l.insta ? "https://www.instagram.com/" + l.insta + "/" : "https://www.instagram.com/explore/search/keyword/?q=" + encodeURIComponent(l.name + " " + (l.city || ""));
       const siteTxt = l.siteKind === "none" ? "sem site" : l.siteKind === "social" ? "só rede social" : l.siteKind === "weak" ? "site simples/link" : "tem site";
       return `<article class="lead ${l.temp}" data-id="${esc(l.id)}">
         <div class="top"><b>${esc(l.name)}</b><span class="tag ${l.temp}">${TL[l.temp]} ${l.score}</span></div>
@@ -41,10 +42,12 @@
         <div class="acts">
           ${wa ? `<a class="wa" href="${esc(wa)}" target="_blank" rel="noopener">WhatsApp</a>` : (l.phone ? `<a href="tel:+${esc(l.phone)}">Ligar</a>` : "")}
           ${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener">Maps</a>` : ""}
+          <a class="ig" href="${esc(igUrl)}" target="_blank" rel="noopener">${l.insta ? "Instagram" : "Buscar no Instagram"}</a>
           <button data-a="copy" type="button">Copiar msg</button>
           <select data-a="stage" aria-label="Etapa">${STAGES.map(s => `<option value="${s[0]}" ${s[0] === l.stage ? "selected" : ""}>${s[1]}</option>`).join("")}</select>
           <button data-a="del" type="button" title="Remover">🗑</button>
         </div>
+        <input data-a="insta" placeholder="@perfil do Instagram (opcional)" value="${esc(l.insta ? "@" + l.insta : "")}" aria-label="Perfil do Instagram">
         <textarea data-a="notes" rows="1" placeholder="Anotações…">${esc(l.notes)}</textarea>
       </article>`;
     }).join("") + (list.length > 300 ? `<div class="empty">Mostrando 300 de ${list.length}. Use os filtros ou exporte o CSV.</div>` : "");
@@ -54,6 +57,7 @@
     const a = e.target.dataset.a, id = e.target.closest(".lead")?.dataset.id; if (!id || !leads[id]) return;
     if (a === "stage") { leads[id].stage = e.target.value; store.saveLeads(); render(); }
     if (a === "notes") { leads[id].notes = e.target.value; store.saveLeads(); }
+    if (a === "insta") { leads[id].insta = GL.igHandle(e.target.value); store.saveLeads(); render(); }
   });
   $("list").addEventListener("click", async e => {
     const b = e.target.closest("button"); if (!b) return;
@@ -67,7 +71,7 @@
     if (!raw || !raw.id || !raw.name) return;
     const ctx = job || { nicho: cfg.nicho, m: nicheObj().m, city: cfg.city };
     const l = GL.finalize(raw, ctx), old = leads[l.id];
-    if (old) { l.stage = old.stage; l.notes = old.notes; l.nicho = old.nicho; l.m = old.m; if (!raw.detailed && old.phone && !l.phone) { l.phone = old.phone; l.whatsapp = old.whatsapp; l.score = GL.score(l); l.temp = GL.tempOf(l.score); } }
+    if (old) { l.stage = old.stage; l.notes = old.notes; l.nicho = old.nicho; l.m = old.m; if (old.insta && !l.insta) l.insta = old.insta; if (!raw.detailed && old.phone && !l.phone) { l.phone = old.phone; l.whatsapp = old.whatsapp; l.score = GL.score(l); l.temp = GL.tempOf(l.score); } }
     leads[l.id] = l;
   }
   const mapsUrl = (extra) => `https://www.google.com/maps/search/${encodeURIComponent([$("query").value.trim() || nq(nicheObj()), extra ? "em " + extra + "," : "em", cfg.city].filter(Boolean).join(" "))}`;

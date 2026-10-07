@@ -14,6 +14,7 @@ O que ele faz
 • Coleta nome, categoria, endereço, telefone, site, nota e avaliações das empresas da pesquisa aberta no Maps.
 • Classifica cada empresa como quente, morna ou fria, com uma pontuação simples e transparente.
 • Monta o link do WhatsApp com uma mensagem pronta para cada tipo de negócio (32 nichos).
+• Atalho para o perfil do Instagram de cada negócio, para contatos que não respondem no WhatsApp.
 • Acompanha cada contato: etapa (novo, contactado, respondeu, reunião, fechado), anotações e filtros.
 • Fila por bairro para cobrir uma cidade inteira, com pausas entre as pesquisas.
 • Exporta em CSV e faz backup/restauração.

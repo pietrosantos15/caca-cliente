@@ -12,7 +12,7 @@ Coleta empresas do **Google Maps** que você abriu, separa as **sem site** (lead
 1. Escolha o **nicho** e a **cidade** e clique em **🔎 Abrir no Maps** (ou pesquise você mesmo no Google Maps, ex.: “dentista em Sorocaba”).
 2. Com a lista de resultados aberta, clique em **▶ Coletar esta pesquisa**. A extensão rola a lista, abre cada ficha, lê telefone/site/endereço e volta. (Modo *Rápido*: só lê a lista, sem abrir as fichas.)
 3. Os leads aparecem no painel, ordenados por temperatura: 🔥 sem site e com telefone, 🌤️ site simples/sem contato, ❄️ já tem site.
-4. **WhatsApp** abre a conversa com a mensagem pronta; **Etapa** e **Anotações** acompanham a negociação; **CSV** exporta; **Backup/Restaurar** guarda e recupera tudo.
+4. **WhatsApp** abre a conversa com a mensagem pronta; **Instagram** abre o perfil do negócio (se o Maps mostrar), ou a busca pelo nome. Se você achar o @ do perfil, cole no campo do card e o botão passa a abrir direto; **Etapa** e **Anotações** acompanham a negociação; **CSV** exporta; **Backup/Restaurar** guarda e recupera tudo.
 
 ### Cobrir uma cidade inteira
 O Maps mostra no máximo ~120 resultados por pesquisa. Em *Opções e fila por bairro* escreva um bairro por linha e clique em **Rodar fila de bairros**: a extensão pesquisa “nicho em bairro, cidade” uma a uma, com pausa entre elas.

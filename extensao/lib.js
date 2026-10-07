@@ -43,6 +43,16 @@
   }
   const tempOf = s => (s >= 70 ? "hot" : s >= 45 ? "warm" : "cold");
 
+  const IG_RESERVED = /^(p|reel|reels|explore|accounts|stories|direct|tv|about|developer|legal)$/;
+  // aceita link do Instagram, @perfil ou perfil puro; devolve só o usuário ("" se inválido)
+  function igHandle(s) {
+    if (!s) return "";
+    const m = /instagram\.com\/([A-Za-z0-9._]{1,30})/i.exec(s);
+    const h = m ? m[1] : String(s).trim().replace(/^@/, "").replace(/\s+/g, "");
+    if (!/^[A-Za-z0-9._]{1,30}$/.test(h) || IG_RESERVED.test(h)) return "";
+    return h.replace(/\.$/, "");
+  }
+
   function finalize(raw, ctx) {
     const phone = normPhone(raw.phone);
     const site = raw.site || "";
@@ -50,7 +60,7 @@
     const l = {
       id: raw.id, name: raw.name, cat: raw.cat || "", addr: raw.addr || "", phone,
       whatsapp: isMobile(phone) ? phone : "", site, siteKind: kind,
-      social: kind === "social" ? site : "", rating: raw.rating || 0, reviews: raw.reviews || 0,
+      social: kind === "social" ? site : "", insta: igHandle(raw.insta || (kind === "social" ? site : "")), rating: raw.rating || 0, reviews: raw.reviews || 0,
       url: raw.url || "", lat: raw.lat || null, lon: raw.lon || null,
       nicho: ctx.nicho, m: ctx.m || "", city: ctx.city, t: Date.now(), stage: "novo", notes: ""
     };
@@ -66,13 +76,13 @@
   const waLink = (l, text) => l.whatsapp ? `https://wa.me/${l.whatsapp}?text=${encodeURIComponent(text)}` : "";
 
   function toCSV(rows) {
-    const cols = ["Nome", "Temperatura", "Score", "Etapa", "Nicho", "Cidade", "Telefone", "WhatsApp", "Site", "Endereço", "Nota", "Avaliações", "Google Maps", "Anotações"];
+    const cols = ["Nome", "Temperatura", "Score", "Etapa", "Nicho", "Cidade", "Telefone", "WhatsApp", "Site", "Endereço", "Nota", "Avaliações", "Instagram", "Google Maps", "Anotações"];
     const q = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
     const T = { hot: "Quente", warm: "Morno", cold: "Frio" };
-    const lines = rows.map(l => [l.name, T[l.temp], l.score, l.stage, l.nicho, l.city, fmtPhone(l.phone), l.whatsapp ? "+" + l.whatsapp : "", l.site, l.addr, l.rating || "", l.reviews || "", l.url, l.notes].map(q).join(";"));
+    const lines = rows.map(l => [l.name, T[l.temp], l.score, l.stage, l.nicho, l.city, fmtPhone(l.phone), l.whatsapp ? "+" + l.whatsapp : "", l.site, l.addr, l.rating || "", l.reviews || "", l.insta ? "@" + l.insta : "", l.url, l.notes].map(q).join(";"));
     return "﻿" + [cols.map(q).join(";"), ...lines].join("\r\n");
   }
 
-  const api = { digits, normPhone, isMobile, fmtPhone, siteKind, score, tempOf, finalize, message, waLink, toCSV };
+  const api = { igHandle, digits, normPhone, isMobile, fmtPhone, siteKind, score, tempOf, finalize, message, waLink, toCSV };
   if (typeof module !== "undefined") module.exports = api; else root.GL = api;
 })(typeof self !== "undefined" ? self : this);
