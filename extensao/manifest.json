@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Garimpo Local — leads do Google Maps",
+  "version": "1.0.0",
+  "description": "Coleta empresas do Google Maps que você abre, separa as sem site (leads quentes) e monta o WhatsApp. Tudo roda no seu navegador, sem servidor.",
+  "permissions": ["sidePanel", "storage", "tabs"],
+  "host_permissions": ["https://www.google.com/maps/*", "https://www.google.com.br/maps/*"],
+  "background": {"service_worker": "background.js"},
+  "side_panel": {"default_path": "panel.html"},
+  "action": {"default_title": "Garimpo Local", "default_icon": {"16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png"}},
+  "icons": {"16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png"},
+  "content_scripts": [{
+    "matches": ["https://www.google.com/maps/*", "https://www.google.com.br/maps/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }]
+}

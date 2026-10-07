@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Garimpo Local</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header>
+  <h1>⛏️ Garimpo Local</h1>
+  <span id="count" class="muted"></span>
+</header>
+
+<section class="card" id="cfg">
+  <div class="row2">
+    <label>Nicho<select id="nicho"></select></label>
+    <label>Cidade<input id="city" placeholder="Sorocaba"></label>
+  </div>
+  <label>Pesquisa no Maps<input id="query" placeholder="ex.: dentista"></label>
+  <div class="btns">
+    <button id="open" class="sec" type="button">🔎 Abrir no Maps</button>
+    <button id="run" type="button">▶ Coletar esta pesquisa</button>
+    <button id="stop" class="sec" type="button" hidden>⏹ Parar</button>
+  </div>
+  <div id="status" class="muted">Abra uma pesquisa no Google Maps e clique em “Coletar”.</div>
+  <details>
+    <summary>Opções e fila por bairro</summary>
+    <label>Seu nome (para a mensagem)<input id="me" placeholder="Pietro"></label>
+    <div class="row2">
+      <label>Modo<select id="mode"><option value="detail">Detalhado (mais exato, mais lento)</option><option value="fast">Rápido (só a lista)</option></select></label>
+      <label>Máx. por pesquisa<input id="max" type="number" min="10" max="200" value="60"></label>
+    </div>
+    <label>Bairros (um por linha) — a fila pesquisa “nicho em bairro, cidade” uma a uma
+      <textarea id="bairros" rows="4" placeholder="Campolim&#10;Centro&#10;Éden&#10;Jardim Europa"></textarea></label>
+    <div class="btns"><button id="queue" type="button">▶ Rodar fila de bairros</button></div>
+    <label>Mensagem personalizada (opcional; use {nome} {eu} {cidade} {nicho})<textarea id="tpl" rows="4" placeholder="Deixe vazio para usar a mensagem do nicho"></textarea></label>
+    <div class="btns"><button id="diag" class="sec" type="button">🩺 Diagnóstico da página</button></div>
+    <pre id="diagout" hidden></pre>
+  </details>
+</section>
+
+<section id="filters">
+  <div class="chips">
+    <button class="chip on" data-t="hot" type="button">🔥 Quente</button>
+    <button class="chip on" data-t="warm" type="button">🌤️ Morno</button>
+    <button class="chip on" data-t="cold" type="button">❄️ Frio</button>
+    <label class="chk"><input type="checkbox" id="onlyPhone"> só com telefone</label>
+  </div>
+  <div class="row2">
+    <select id="fNicho"><option value="">Todos os nichos</option></select>
+    <select id="fStage"><option value="">Todas as etapas</option></select>
+  </div>
+  <input id="q" placeholder="Buscar por nome ou endereço…">
+  <div class="btns">
+    <button id="csv" class="sec" type="button">⬇ CSV</button>
+    <button id="bak" class="sec" type="button">💾 Backup</button>
+    <button id="restore" class="sec" type="button">📂 Restaurar</button>
+    <button id="clear" class="danger" type="button">🗑 Limpar tudo</button>
+    <input id="file" type="file" accept=".json" hidden>
+  </div>
+</section>
+
+<main id="list"></main>
+<script src="templates.js"></script>
+<script src="lib.js"></script>
+<script src="panel.js"></script>
+</body>
+</html>
