@@ -408,15 +408,6 @@ function checkDDD(arr){
     if(d && d !== top[0] && l.waKind !== "informado por você"){ l.dddWarn = d; l.whatsapp = null; l.waKind = ""; } });
 }
 
-/* ====== fonte alternativa ao Overpass: Geoapify (via /api/geoapify, precisa de GEOAPIFY_KEY na Vercel) ====== */
-async function geoapifyPlaces(nq, g, rad){
-  if(!location.protocol.startsWith("http") || !nq.f) return [];
-  try{
-    const r = await fetchT("/api/geoapify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({f:nq.f, lat:g.lat, lon:g.lon, radius:Math.round(rad*1000)})}, 25000);
-    if(!r.ok) return [];
-    return (await r.json()).elements || [];
-  }catch{ return []; }
-}
 /* ====== fonte complementar: Google Places (via /api/places, opcional) ====== */
 async function fetchPlaces(nq, g, rad){
   if(!location.protocol.startsWith("http")) return [];
@@ -458,16 +449,11 @@ async function search(niche, city, rad){
     map.setView([g.lat,g.lon], rad > 15 ? 10 : rad > 8 ? 11 : rad > 3 ? 12 : 13);
     if(circle) circle.remove(); circle = L.circle([g.lat,g.lon], {radius:rad*1000, color:"#3b82f6", weight:1.5, fillOpacity:.03}).addTo(map);
     toast("Buscando em "+(g.name||city)+"… pode levar alguns segundos");
-    // Geoapify (servidor estável, mesmos dados do OSM) parte junto com o Overpass: se o Overpass cair, a lista já está pronta
-    const geoP = geoapifyPlaces(nq, g, rad);
     let elements = [], ovErr = null;
     try{ elements = (await overpass(buildQuery(nq, g.lat, g.lon, rad))).elements || []; }
     catch(e){ ovErr = e; }
-    let usedGeo = false;
-    if(ovErr || elements.length < 10) toast(ovErr ? "Servidor principal ocupado, usando outra fonte…" : "Poucos resultados, buscando em outra fonte…");
-    const have = new Set(elements.map(e => e.type+e.id)), geo = (await geoP).filter(e => !have.has(e.type+e.id));
-    if(geo.length){ usedGeo = ovErr || elements.length < 10; elements = elements.concat(geo); }
-    // ainda faltou? tenta o Nominatim (outro serviço do OSM, independente do Overpass)
+    if(ovErr || elements.length < 10) toast(ovErr ? "Servidor principal ocupado, usando a fonte reserva…" : "Poucos resultados, buscando na fonte reserva…");
+    // Overpass falhou ou trouxe pouco? tenta o Nominatim (outro serviço do OSM, independente do Overpass)
     if(ovErr || elements.length < 10){
       try{
         const extra = await nominatimPlaces(nq, g.lat, g.lon, rad), ids = new Set(elements.map(e => e.type+e.id));
@@ -484,7 +470,7 @@ async function search(niche, city, rad){
     selId = null;
     const h = store.get("gc_hist", []).filter(x => !(x.niche===niche && x.city===city));
     h.unshift({niche, city, rad}); store.set("gc_hist", h.slice(0,10));
-    toast(usedGeo && ovErr ? "Servidor principal ocupado: lista vinda do Geoapify (pode ser parcial; busque de novo mais tarde para completar)." : ovStale ? "Servidores do OpenStreetMap fora do ar: mostrando o resultado salvo desta busca (pode estar desatualizado)." : ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
+    toast(ovStale ? "Servidores do OpenStreetMap fora do ar: mostrando o resultado salvo desta busca (pode estar desatualizado)." : ovErr && leads.length ? "Servidor principal ocupado: lista parcial (fonte reserva). Busque de novo em alguns minutos para completar." : leads.length ? "" : "Nada encontrado. Aumente o raio ou tente outro nicho (o OSM pode ter poucos dados aí).", !leads.length);
     curSearch = {id:searchId(niche, city, rad), niche, city, rad}; savePartial = !!(ovErr || ovStale);
     renderAll();
     saveSearch();

@@ -1,0 +1,6 @@
+# HTTPS automático (Let's Encrypt) para o domínio em DOMINIO (vem do arquivo .env).
+# Sem domínio próprio, o instalar.sh usa SEU-IP.sslip.io, que resolve sozinho para o IP da VM.
+{$DOMINIO} {
+	reverse_proxy overpass:80
+	encode gzip
+}

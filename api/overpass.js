@@ -4,9 +4,11 @@
 //  - se todos os espelhos caírem, devolve o último resultado salvo (até 7 dias) marcado como `stale`;
 //  - "disjuntor": depois de uma rodada em que todos falharam, por 3 minutos responde `down` na hora, sem esperar 30s.
 const crypto = require("crypto");
-// OVERPASS_EPS na Vercel (URLs separadas por vírgula) substitui a lista: útil para um espelho privado/pago
-const EPS = String(process.env.OVERPASS_EPS || "").split(",").map(s => s.trim()).filter(Boolean);
-if(!EPS.length) EPS.push(
+// OVERPASS_EPS na Vercel (URLs separadas por vírgula): servidor(es) próprio(s), consultados ANTES dos espelhos públicos.
+// Veja servidor-overpass/README.md para subir o seu na Oracle Cloud. Os públicos ficam só como reserva.
+const PRIVADOS = String(process.env.OVERPASS_EPS || "").split(",").map(s => s.trim()).filter(Boolean);
+const EPS = [...PRIVADOS];
+EPS.push(
   "https://overpass-api.de/api/interpreter",
   "https://lz4.overpass-api.de/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
@@ -45,7 +47,8 @@ const kvKey = q => "ov:" + crypto.createHash("sha1").update(q).digest("hex");
 
 async function tryEp(ep, q, outer){
   // limite de tempo por servidor: um espelho travado não segura os demais
-  const c = new AbortController(), t = setTimeout(() => c.abort(), EP_TIMEOUT_MS), on = () => c.abort();
+  // servidor próprio não tem fila: pode levar mais tempo numa consulta pesada sem ser abandonado
+  const c = new AbortController(), t = setTimeout(() => c.abort(), PRIVADOS.includes(ep) ? 25000 : EP_TIMEOUT_MS), on = () => c.abort();
   outer.addEventListener("abort", on);
   try{ return await tryEpInner(ep, q, c.signal); }
   finally{ clearTimeout(t); outer.removeEventListener("abort", on); }

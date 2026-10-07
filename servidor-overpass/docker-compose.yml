@@ -1,0 +1,47 @@
+# Overpass próprio com os dados do OpenStreetMap do Brasil + Caddy (HTTPS automático).
+# Suba com: docker compose up -d   (o instalar.sh faz isso por você)
+services:
+  overpass:
+    image: wiktorn/overpass-api:latest
+    container_name: overpass
+    restart: unless-stopped
+    environment:
+      OVERPASS_MODE: init                       # na 1ª vez carrega o arquivo do Brasil; depois só atualiza
+      OVERPASS_META: "no"                       # sem histórico de edições: banco menor e mais rápido
+      OVERPASS_PLANET_URL: ${PLANET_URL:-https://download.geofabrik.de/south-america/brazil-latest.osm.pbf}
+      OVERPASS_DIFF_URL: ${DIFF_URL:-https://download.geofabrik.de/south-america/brazil-updates/}
+      # o Geofabrik distribui .pbf; o Overpass só lê .osm.bz2, então converte com o osmium (já vem na imagem)
+      OVERPASS_PLANET_PREPROCESS: "mv /db/planet.osm.bz2 /db/planet.osm.pbf && osmium cat -o /db/planet.osm.bz2 /db/planet.osm.pbf && rm /db/planet.osm.pbf"
+      OVERPASS_COMPRESSION: gz
+      OVERPASS_UPDATE_SLEEP: 86400              # puxa as atualizações do OSM uma vez por dia
+      OVERPASS_USE_AREAS: "false"               # o app busca por raio (around), não por área: economiza horas na carga
+      OVERPASS_RULES_LOAD: 10
+      OVERPASS_RATE_LIMIT: 1000                 # limite de consultas simultâneas por IP: na prática, sem limite
+      OVERPASS_ALLOW_DUPLICATE_QUERIES: "yes"   # a Vercel repete a mesma consulta do mesmo IP: tem que ser permitido
+      OVERPASS_SPACE: ${OVERPASS_SPACE:-8589934592}   # 8 GB de RAM por consulta (a VM tem 24 GB)
+      OVERPASS_TIME: 3600
+      OVERPASS_MAX_TIMEOUT: 300
+      OVERPASS_FASTCGI_PROCESSES: 4
+      OVERPASS_STOP_AFTER_INIT: "false"
+    volumes:
+      - ./db:/db
+    ports:
+      - "127.0.0.1:12345:80"                    # só a própria máquina; quem atende a internet é o Caddy
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    depends_on:
+      - overpass
+    environment:
+      DOMINIO: ${DOMINIO:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    ports:
+      - "80:80"
+      - "443:443"
+
+volumes:
+  caddy_data:
