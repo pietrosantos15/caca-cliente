@@ -107,6 +107,7 @@ const saveS = () => { store.set("gc_state", S); cloudSoon(); };
 const saveCfg = () => { cfg.t = Date.now(); store.set("gc_cfg", cfg); cloudSoon(); };
 const tplFor = l => (cfg.tpl === DEFAULT_TPL && NICHE_TPL[l.tplKey]) || cfg.tpl;
 const msgFor = l => tplFor(l).replaceAll("{nome}", l.name).replaceAll("{nicho}", l.nicho || "comércios").replaceAll("{cidade}", l.city || "sua cidade").replaceAll("{eu}", cfg.me || "Pietro");
+const igOf = l => (S[l.id]?.ig ? "https://www.instagram.com/" + S[l.id].ig + "/" : (l.insta || ""));
 const waLink = l => l.whatsapp ? `https://wa.me/${l.whatsapp}?text=${encodeURIComponent(msgFor(l))}` : "";
 function setStage(l, stage){
   S[l.id] = Object.assign(S[l.id] || {}, {stage, snap:l, u:Date.now()}); delete S[l.id].del;
@@ -438,7 +439,7 @@ function mergePlaces(osmLeads, places){
   });
   return osmLeads.concat(added);
 }
-const hasContact = l => !!(l.phone || l.whatsapp || l.insta || l.face || l.email);
+const hasContact = l => !!(l.phone || l.whatsapp || l.insta || S[l.id]?.ig || l.face || l.email);
 
 async function search(niche, city, rad){
   const btn = $("go"); btn.disabled = true; toast("Localizando cidade…");
@@ -483,7 +484,7 @@ async function search(niche, city, rad){
 function visible(){
   let a = leads.filter(l => filt.site || !l.hasSite);
   if(filt.wa) a = a.filter(l => l.whatsapp);
-  if(filt.ig) a = a.filter(l => l.insta || l.face);
+  if(filt.ig) a = a.filter(l => l.insta || S[l.id]?.ig || l.face);
   if(filt.em) a = a.filter(l => l.email);
   // temperatura: sem nenhuma marcada mostra todas; marcando, mostra só as escolhidas
   if(tempSel.hot || tempSel.warm || tempSel.cold) a = a.filter(l => tempSel[l.temp]);
@@ -539,11 +540,12 @@ function renderList(){
     ${l.phone ? `<div>📞 ${esc(fmtPhone(l.phone, cfg.cc))}${l.dddWarn ? ` <span class="tag" title="O DDD deste número é diferente do predominante na região. Confira antes de ligar.">⚠ DDD ${esc(l.dddWarn)} diferente da região</span>` : ""}</div>` : ""}
     <div class="acts">
       ${l.whatsapp ? `<a class="btn wa" data-act="wa" href="${esc(waLink(l))}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ""}
+      ${igOf(l) ? `<a class="btn ig" data-act="ig" href="${esc(igOf(l))}" target="_blank" rel="noopener">📷 Instagram</a>` : ""}
       <button class="btn" data-act="det" type="button">📝 Detalhes</button>
       <a class="btn" href="${esc(l.google)}" target="_blank" rel="noopener">🔍 Buscar</a>
     </div>
     <div class="acts">
-      ${hasContact(l) ? `${l.whatsapp?`<span class="tag">WhatsApp ${esc(l.waKind)}</span>`:""}${l.insta?`<a class="tag" href="${esc(l.insta)}" target="_blank" rel="noopener">Instagram</a>`:""}${l.face?`<a class="tag" href="${esc(l.face)}" target="_blank" rel="noopener">Facebook</a>`:""}${l.email?`<span class="tag">${esc(l.email)}</span>`:""}` : `<span class="tag">nenhum contato encontrado</span>`}
+      ${hasContact(l) ? `${l.whatsapp?`<span class="tag">WhatsApp ${esc(l.waKind)}</span>`:""}${igOf(l)?`<a class="tag" href="${esc(igOf(l))}" target="_blank" rel="noopener">Instagram</a>`:""}${l.face?`<a class="tag" href="${esc(l.face)}" target="_blank" rel="noopener">Facebook</a>`:""}${l.email?`<span class="tag">${esc(l.email)}</span>`:""}` : `<span class="tag">nenhum contato encontrado</span>`}
       ${l.hasSite ? `<span class="tag site">tem site</span>` : ""}
       ${stageOf(l)!=="novo" ? `<span class="tag stg">${stageName(stageOf(l))}</span>` : ""}
     </div></div>`).join("") || `<div class="addr">Nenhum lead com esses filtros.</div>`;
@@ -610,21 +612,23 @@ function detail(id){
     <div class="addr">${esc(l.addr || "Endereço não informado")} · ${esc(l.nicho||"")} · ${esc(l.city||"")}</div>
     <div class="two"><label>Etapa<select id="dSt">${STAGES.map(([k,n]) => `<option value="${k}" ${stageOf(l)===k?"selected":""}>${n}</option>`).join("")}</select></label>
     <label>WhatsApp/telefone encontrado por você<input id="dMan" value="${esc(S[l.id]?.manual||"")}" placeholder="(11) 91234-5678"></label></div>
+    <label>Instagram encontrado por você (@perfil)<input id="dIg" value="${esc(S[l.id]?.ig ? "@" + S[l.id].ig : "")}" placeholder="@perfil"></label>
     <label>Anotações<textarea id="dNotes" rows="3">${esc(S[l.id]?.notes||"")}</textarea></label>
     <div>Mensagem sugerida:</div><pre>${esc(msgFor(l))}</pre>
     <div class="acts">${l.whatsapp?`<a class="btn wa" href="${esc(waLink(l))}" target="_blank" rel="noopener">💬 Abrir WhatsApp</a>`:""}
       <button class="btn" id="dCp" type="button">Copiar mensagem</button>
       <a class="btn" href="${esc(l.google)}" target="_blank" rel="noopener">🔍 Google</a>
       <a class="btn" href="${esc(l.osm)}" target="_blank" rel="noopener">${l.src === "google" ? "Google" : "OSM"}</a>
-      ${l.insta?`<a class="btn" href="${esc(l.insta)}" target="_blank" rel="noopener">Instagram</a>`:""}${l.face?`<a class="btn" href="${esc(l.face)}" target="_blank" rel="noopener">Facebook</a>`:""}
+      ${igOf(l)?`<a class="btn ig" href="${esc(igOf(l))}" target="_blank" rel="noopener">Instagram</a>`:""}${l.face?`<a class="btn" href="${esc(l.face)}" target="_blank" rel="noopener">Facebook</a>`:""}
       ${l.site?`<a class="btn" href="${esc(l.site)}" target="_blank" rel="noopener">Site atual</a>`:""}</div>
     <div class="acts"><button class="pri btn" id="dSave" type="button">Salvar</button><button class="btn" id="dClose" type="button">Fechar</button></div>`);
   m.querySelector("#dClose").onclick = () => m.remove();
   m.querySelector("#dCp").onclick = e => navigator.clipboard.writeText(msgFor(l)).then(() => e.target.textContent = "Copiado ✓");
   m.querySelector("#dSave").onclick = () => {
     const st = m.querySelector("#dSt").value, man = m.querySelector("#dMan").value.trim(), notes = m.querySelector("#dNotes").value.trim();
-    S[l.id] = Object.assign(S[l.id] || {}, {stage:st, manual:man, notes, snap:l, u:Date.now()}); delete S[l.id].del;
-    if(st === "novo" && !man && !notes) S[l.id] = {stage:"novo", del:1, u:Date.now()};
+    const ig = m.querySelector("#dIg").value.trim().replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").replace(/^@/, "").replace(/[\/?#].*$/, "").replace(/\s+/g, "");
+    S[l.id] = Object.assign(S[l.id] || {}, {stage:st, manual:man, notes, ig, snap:l, u:Date.now()}); delete S[l.id].del;
+    if(st === "novo" && !man && !notes && !ig) S[l.id] = {stage:"novo", del:1, u:Date.now()};
     saveS();
     const live = leads.find(x => x.id === l.id); if(live) applyManual(live);
     m.remove(); renderAll();
@@ -744,7 +748,7 @@ $("list").addEventListener("click", e => {
   const card = e.target.closest(".card"); if(!card) return;
   const id = card.dataset.id, act = e.target.closest("[data-act]")?.dataset.act;
   if(act === "det"){ detail(id); return; }
-  if(act === "wa"){ const l = leads.find(x => x.id === id); if(l && stageOf(l) === "novo"){ setStage(l, "contactado"); setTimeout(renderAll, 0); } return; }
+  if(act === "wa" || act === "ig"){ const l = leads.find(x => x.id === id); if(l && stageOf(l) === "novo"){ setStage(l, "contactado"); setTimeout(renderAll, 0); } return; }
   if(e.target.closest("a")) return;
   select(id, true);
 });

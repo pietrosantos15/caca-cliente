@@ -41,6 +41,7 @@ aside>*{flex-shrink:0}
 .acts{display:flex;gap:6px;flex-wrap:wrap}
 .btn{border-radius:7px;padding:5px 10px;font-size:12px;text-decoration:none;color:var(--tx);border:1px solid var(--line);background:var(--panel);display:inline-block}
 .btn.wa{background:#1fbf5b;border-color:#1fbf5b;color:#fff;font-weight:700}
+.btn.ig{background:#e1306c;border-color:#e1306c;color:#fff;font-weight:700}
 .tag{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--panel2);color:var(--mut);display:inline-block;text-decoration:none}
 .tag.stg{color:var(--acd);font-weight:600}
 .tag.site{background:#fde8e1;color:#b4411d}
